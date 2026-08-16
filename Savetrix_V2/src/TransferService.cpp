@@ -13,6 +13,7 @@
 #include <system_error>
 
 #include <RE/Skyrim.h>
+#include <RE/M/Misc.h>
 #include <REL/Relocation.h>
 #include <spdlog/spdlog.h>
 
@@ -154,8 +155,7 @@ namespace Savetrix
             profile.perks.push_back(std::move(perk));
         }
 
-        if (auto* spellList = base->GetSpellList(); spellList && spellList->actorEffects) {
-            auto* effects = spellList->actorEffects;
+        if (auto* effects = base->GetSpellList(); effects) {
             for (std::uint32_t i = 0; i < effects->numSpells; ++i) {
                 auto* spell = effects->spells[i];
                 if (Portable(spell)) {

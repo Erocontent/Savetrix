@@ -9,6 +9,8 @@ namespace Savetrix
     {
         std::size_t perksAdded{};
         std::size_t spellsAdded{};
+        std::size_t suspiciousPerksSkipped{};
+        std::size_t suspiciousSpellsSkipped{};
         std::size_t shoutsAdded{};
         std::size_t wordsUnlocked{};
         std::size_t inventoryStacksAdded{};

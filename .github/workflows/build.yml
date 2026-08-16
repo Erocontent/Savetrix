@@ -1,0 +1,74 @@
+name: Build Savetrix V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows / MSVC / Release
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        working-directory: Savetrix_V2
+
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Setup vcpkg cache/toolchain
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'ee12231b20c95013c6638d845d04c91559a1d1ff'
+
+      - name: Validate profile schema
+        shell: pwsh
+        run: python scripts/validate_profile.py
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset release
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build --preset release --parallel
+
+      - name: Verify DLL
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/dist/Data/SKSE/Plugins/Savetrix.dll")) {
+            throw "Savetrix.dll was not generated"
+          }
+          Get-Item "build/dist/Data/SKSE/Plugins/Savetrix.dll" | Format-List Name,Length,LastWriteTime
+
+      - name: Package mod
+        shell: pwsh
+        run: ./scripts/package.ps1
+
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Savetrix-V2-Windows
+          path: Savetrix_V2/Savetrix_V2_Release.zip
+          if-no-files-found: error
+
+      - name: Upload raw DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Savetrix-V2-DLL
+          path: Savetrix_V2/build/dist/Data/SKSE/Plugins/Savetrix.dll
+          if-no-files-found: error

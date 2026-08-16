@@ -20,7 +20,7 @@ jobs:
         working-directory: Savetrix_V2
 
     env:
-      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
       VCPKG_DEFAULT_HOST_TRIPLET: x64-windows
 
     steps:

@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -11,12 +12,15 @@
 #include <initializer_list>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #include <RE/Skyrim.h>
+#include <SKSE/SKSE.h>
 #include <RE/I/InventoryEntryData.h>
 #include <REL/Relocation.h>
 #include <spdlog/spdlog.h>
@@ -66,6 +70,26 @@ namespace
     {
         TransferDisposition disposition{ TransferDisposition::kSkip };
         std::string reason;
+    };
+
+    struct PreflightReport
+    {
+        bool coreDataValid{ true };
+        bool mainQuestReady{ true };
+
+        std::size_t perksSafe{};
+        std::size_t perksSuspicious{};
+        std::size_t perksUnsafe{};
+        std::size_t spellsSafe{};
+        std::size_t spellsSuspicious{};
+        std::size_t spellsUnsafe{};
+        std::size_t shoutsReady{};
+        std::size_t inventoryReady{};
+        std::size_t inventoryUnsafe{};
+        std::size_t questCandidates{};
+        std::size_t mainQuestCandidates{};
+        std::size_t missingForms{};
+        std::set<std::string> missingPlugins;
     };
 
     std::string Lower(std::string_view a_value)
@@ -158,7 +182,13 @@ namespace
                 "animation perk",
                 "interaction icons",
                 "event perk",
-                "state perk"
+                "state perk",
+                "surrender perk",
+                "greeting perk",
+                "enchanting mult",
+                "multiplier",
+                "fake skill",
+                "habilidade falsa"
             })) {
             return { TransferDisposition::kSuspicious, "technical_name_pattern" };
         }
@@ -208,7 +238,16 @@ namespace
                 "initialize ",
                 "bootstrap",
                 "refresh spell",
-                "reset spell"
+                "reset spell",
+                "switchpower",
+                "switch power",
+                "options:",
+                "preset",
+                "configuration",
+                "config power",
+                "settings power",
+                "setup power",
+                "utility power"
             })) {
             return { TransferDisposition::kSuspicious, "technical_name_pattern" };
         }
@@ -235,6 +274,283 @@ namespace
 
         const char* name = a_object->GetName();
         return name && *name;
+    }
+
+    bool FiniteNonNegative(float a_value)
+    {
+        return std::isfinite(a_value) && a_value >= 0.0F;
+    }
+
+    bool CoreProfileDataValid(const Savetrix::Profile& a_profile)
+    {
+        if (a_profile.stats.level == 0 ||
+            !std::isfinite(a_profile.stats.healthBase) || a_profile.stats.healthBase <= 0.0F ||
+            !FiniteNonNegative(a_profile.stats.magickaBase) ||
+            !FiniteNonNegative(a_profile.stats.staminaBase) ||
+            !FiniteNonNegative(a_profile.stats.dragonSouls) ||
+            !FiniteNonNegative(a_profile.stats.playerXp) ||
+            !FiniteNonNegative(a_profile.stats.playerLevelThreshold)) {
+            return false;
+        }
+
+        for (const auto& skill : a_profile.skills) {
+            if (!std::isfinite(skill.level) ||
+                !FiniteNonNegative(skill.xp) ||
+                !FiniteNonNegative(skill.levelThreshold)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void RecordMissing(PreflightReport& a_report, const Savetrix::FormRef& a_ref)
+    {
+        ++a_report.missingForms;
+        if (!a_ref.plugin.empty()) {
+            a_report.missingPlugins.insert(a_ref.plugin);
+        }
+    }
+
+    bool MainQuestBootstrapReady()
+    {
+        auto* mq101Form = RE::TESForm::LookupByEditorID("MQ101");
+        auto* mq102Form = RE::TESForm::LookupByEditorID("MQ102");
+        auto* mq101 = mq101Form ? mq101Form->As<RE::TESQuest>() : nullptr;
+        auto* mq102 = mq102Form ? mq102Form->As<RE::TESQuest>() : nullptr;
+        if (!mq101 || !mq102) {
+            return false;
+        }
+
+        const bool helgenResolved = mq101->IsCompleted();
+        const bool beforeStormInitialized =
+            mq102->IsCompleted() || mq102->IsRunning() || mq102->GetCurrentStageID() > 0;
+        return helgenResolved && beforeStormInitialized;
+    }
+
+    PreflightReport RunPreflight(const Savetrix::Profile& a_profile)
+    {
+        PreflightReport report;
+        report.coreDataValid = CoreProfileDataValid(a_profile);
+
+        for (const auto& perkState : a_profile.perks) {
+            auto* perk = Savetrix::ResolveFormAs<RE::BGSPerk>(perkState.form);
+            if (!perk) {
+                RecordMissing(report, perkState.form);
+                continue;
+            }
+
+            const auto classification = ClassifyPerk(perk);
+            if (classification.disposition == TransferDisposition::kSkip) {
+                ++report.perksUnsafe;
+            } else if (!IsSafePolicy(perkState.transferPolicy) ||
+                       classification.disposition == TransferDisposition::kSuspicious) {
+                ++report.perksSuspicious;
+            } else {
+                ++report.perksSafe;
+            }
+        }
+
+        for (const auto& spellState : a_profile.spells) {
+            auto* spell = Savetrix::ResolveFormAs<RE::SpellItem>(spellState.form);
+            if (!spell) {
+                RecordMissing(report, spellState.form);
+                continue;
+            }
+
+            const auto classification = ClassifySpell(spell);
+            if (classification.disposition == TransferDisposition::kSkip) {
+                ++report.spellsUnsafe;
+            } else if (!IsSafePolicy(spellState.transferPolicy) ||
+                       classification.disposition == TransferDisposition::kSuspicious) {
+                ++report.spellsSuspicious;
+            } else {
+                ++report.spellsSafe;
+            }
+        }
+
+        for (const auto& shoutState : a_profile.shouts) {
+            auto* shout = Savetrix::ResolveFormAs<RE::TESShout>(shoutState.form);
+            if (!shout) {
+                RecordMissing(report, shoutState.form);
+                continue;
+            }
+            ++report.shoutsReady;
+
+            for (const auto& wordState : shoutState.words) {
+                if (!wordState.known || wordState.form.empty()) {
+                    continue;
+                }
+                if (!Savetrix::ResolveFormAs<RE::TESWordOfPower>(wordState.form)) {
+                    RecordMissing(report, wordState.form);
+                }
+            }
+        }
+
+        for (const auto& itemState : a_profile.inventory) {
+            if (itemState.count <= 0) {
+                continue;
+            }
+
+            auto* object = Savetrix::ResolveFormAs<RE::TESBoundObject>(itemState.form);
+            if (!object) {
+                RecordMissing(report, itemState.form);
+                continue;
+            }
+            if (!SafeTransferInventoryItem(object, nullptr)) {
+                ++report.inventoryUnsafe;
+            } else {
+                ++report.inventoryReady;
+            }
+        }
+
+        for (const auto& questState : a_profile.quests) {
+            if (!questState.completed || !questState.restorable) {
+                continue;
+            }
+
+            ++report.questCandidates;
+            if (questState.category == "main") {
+                ++report.mainQuestCandidates;
+            }
+            if (!Savetrix::ResolveFormAs<RE::TESQuest>(questState.form)) {
+                RecordMissing(report, questState.form);
+            }
+        }
+
+        if (report.mainQuestCandidates > 0) {
+            report.mainQuestReady = MainQuestBootstrapReady();
+        }
+
+        return report;
+    }
+
+    void LogPreflight(const PreflightReport& a_report)
+    {
+        spdlog::info(
+            "Preflight: coreValid={}, perksSafe={}, perksSuspicious={}, perksUnsafe={}, spellsSafe={}, spellsSuspicious={}, spellsUnsafe={}, shoutsReady={}, inventoryReady={}, inventoryUnsafe={}, questCandidates={}, mainQuestCandidates={}, mainQuestReady={}, missingForms={}, missingPlugins={}",
+            a_report.coreDataValid,
+            a_report.perksSafe,
+            a_report.perksSuspicious,
+            a_report.perksUnsafe,
+            a_report.spellsSafe,
+            a_report.spellsSuspicious,
+            a_report.spellsUnsafe,
+            a_report.shoutsReady,
+            a_report.inventoryReady,
+            a_report.inventoryUnsafe,
+            a_report.questCandidates,
+            a_report.mainQuestCandidates,
+            a_report.mainQuestReady,
+            a_report.missingForms,
+            a_report.missingPlugins.size());
+    }
+
+    bool QueueSafeHudRefresh()
+    {
+        const auto* taskInterface = SKSE::GetTaskInterface();
+        if (!taskInterface) {
+            spdlog::warn("Post-import HUD refresh: SKSE task interface unavailable");
+            return false;
+        }
+
+        taskInterface->AddUITask([]() {
+            auto* queue = RE::UIMessageQueue::GetSingleton();
+            if (!queue) {
+                spdlog::warn("Post-import HUD refresh: UIMessageQueue unavailable");
+                return;
+            }
+
+            const RE::BSFixedString hudMenuName{ RE::HUDMenu::MENU_NAME };
+            queue->AddMessage(hudMenuName, RE::UI_MESSAGE_TYPE::kUpdate, nullptr);
+            spdlog::info("Post-import HUD refresh: queued HUD Menu kUpdate");
+        });
+        return true;
+    }
+
+    void WriteImportReport(
+        const Savetrix::Profile& a_profile,
+        const PreflightReport& a_preflight,
+        const Savetrix::ImportReport& a_report)
+    {
+        try {
+            std::vector<std::string> missingPlugins(
+                a_preflight.missingPlugins.begin(),
+                a_preflight.missingPlugins.end());
+
+            nlohmann::json json = {
+                { "reportVersion", 1 },
+                { "savetrixVersion", std::string(Savetrix::kModVersion) },
+                { "generatedAtUtc", TimestampUtc() },
+                { "sourceCharacter", a_profile.characterName },
+                { "sourceRuntime", a_profile.runtimeVersion },
+                { "targetRuntime", REL::Module::get().version().string() },
+                { "preflight", {
+                    { "coreDataValid", a_preflight.coreDataValid },
+                    { "perksSafe", a_preflight.perksSafe },
+                    { "perksSuspicious", a_preflight.perksSuspicious },
+                    { "perksUnsafe", a_preflight.perksUnsafe },
+                    { "spellsSafe", a_preflight.spellsSafe },
+                    { "spellsSuspicious", a_preflight.spellsSuspicious },
+                    { "spellsUnsafe", a_preflight.spellsUnsafe },
+                    { "shoutsReady", a_preflight.shoutsReady },
+                    { "inventoryReady", a_preflight.inventoryReady },
+                    { "inventoryUnsafe", a_preflight.inventoryUnsafe },
+                    { "questCandidates", a_preflight.questCandidates },
+                    { "mainQuestCandidates", a_preflight.mainQuestCandidates },
+                    { "mainQuestReady", a_preflight.mainQuestReady },
+                    { "missingForms", a_preflight.missingForms },
+                    { "missingPlugins", missingPlugins }
+                } },
+                { "import", {
+                    { "perksAdded", a_report.perksAdded },
+                    { "spellsAdded", a_report.spellsAdded },
+                    { "suspiciousPerksSkipped", a_report.suspiciousPerksSkipped },
+                    { "suspiciousSpellsSkipped", a_report.suspiciousSpellsSkipped },
+                    { "shoutsAdded", a_report.shoutsAdded },
+                    { "wordsUnlocked", a_report.wordsUnlocked },
+                    { "inventoryStacksAdded", a_report.inventoryStacksAdded },
+                    { "missingForms", a_report.missingForms },
+                    { "unsafeFormsSkipped", a_report.unsafeFormsSkipped },
+                    { "questsRestored", a_report.questsRestored },
+                    { "questsAlreadyComplete", a_report.questsAlreadyComplete },
+                    { "questsAlreadyAhead", a_report.questsAlreadyAhead },
+                    { "questsSkippedInProgress", a_report.questsSkippedInProgress },
+                    { "questsSkippedUnsafe", a_report.questsSkippedUnsafe },
+                    { "mainQuestDeferred", a_report.mainQuestDeferred },
+                    { "questsMissing", a_report.questsMissing },
+                    { "questsFailed", a_report.questsFailed },
+                    { "hudRefreshQueued", a_report.hudRefreshQueued }
+                } },
+                { "recommendation", "save_and_reload" }
+            };
+
+            std::filesystem::create_directories(Savetrix::Paths::ProfileDirectory());
+            const auto target = Savetrix::Paths::ProfileDirectory() / "last_import_report.json";
+            const auto temp = target.string() + ".tmp";
+            {
+                std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+                if (!out) {
+                    throw std::runtime_error("cannot open temporary import report");
+                }
+                out << json.dump(2) << '\n';
+                out.flush();
+                if (!out) {
+                    throw std::runtime_error("cannot write import report");
+                }
+            }
+
+            std::error_code ec;
+            std::filesystem::remove(target, ec);
+            ec.clear();
+            std::filesystem::rename(temp, target, ec);
+            if (ec) {
+                throw std::system_error(ec, "cannot replace import report");
+            }
+
+            spdlog::info("Import report written to {}", target.string());
+        } catch (const std::exception& e) {
+            spdlog::warn("Could not write import report: {}", e.what());
+        }
     }
 
     RE::TESNPC* GetPlayerBase(RE::PlayerCharacter* a_player)
@@ -356,7 +672,7 @@ namespace Savetrix
         spdlog::info("Export checkpoint: skills OK");
 
         // Perks can live on the player's changed NPC base and/or in the runtime-added list.
-        // V2.1.1 classifies portable perks as safe or suspicious. Suspicious perks remain
+        // V2.2 classifies portable perks as safe or suspicious. Suspicious perks remain
         // visible in profile.json for auditing, but F11 will not restore them automatically.
         std::map<std::string, PerkState> perkMap;
         std::size_t perkSafe = 0;
@@ -541,7 +857,7 @@ namespace Savetrix
             }
 
             spdlog::info("Exported '{}' level {} with {} quest snapshots to {}", profile.characterName, profile.stats.level, profile.quests.size(), target.string());
-            Notify("Savetrix V2.1.1: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
+            Notify("Savetrix V2.2: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
             return true;
         } catch (const std::exception& e) {
             spdlog::error("Export failed: {}", e.what());
@@ -577,7 +893,28 @@ namespace Savetrix
             return false;
         }
 
+        if (importAppliedThisProcess_) {
+            spdlog::warn("Import blocked: F11 was already used successfully in this Skyrim process");
+            Notify("Savetrix V2.2: F11 ja foi usado nesta execucao. Salve, feche o Skyrim e abra novamente para outro import.");
+            return false;
+        }
+
+        const auto preflight = RunPreflight(profile);
+        LogPreflight(preflight);
+        if (!preflight.coreDataValid) {
+            spdlog::error("Import blocked by preflight: invalid core numeric data");
+            Notify("Savetrix V2.2: preflight bloqueou o import por dados centrais invalidos.");
+            return false;
+        }
+
+        if (!preflight.mainQuestReady && preflight.mainQuestCandidates > 0) {
+            spdlog::warn(
+                "Preflight: main quest bootstrap is not ready; {} main-quest milestones will be deferred",
+                preflight.mainQuestCandidates);
+        }
+
         ImportReport report;
+        importAppliedThisProcess_ = true;
 
         // Character layer: same non-destructive V1 behavior. Campaign milestones are restored afterwards.
         base->actorData.level = std::clamp<std::uint16_t>(profile.stats.level, 1, 65535);
@@ -734,7 +1071,17 @@ namespace Savetrix
         }
 
 
-        const auto campaign = ImportCampaignState(profile.quests);
+        auto questsForImport = profile.quests;
+        if (!preflight.mainQuestReady && preflight.mainQuestCandidates > 0) {
+            for (auto& questState : questsForImport) {
+                if (questState.category == "main" && questState.completed && questState.restorable) {
+                    questState.restorable = false;
+                    ++report.mainQuestDeferred;
+                }
+            }
+        }
+
+        const auto campaign = ImportCampaignState(questsForImport);
         report.questsRestored = campaign.restored;
         report.questsAlreadyComplete = campaign.alreadyComplete;
         report.questsAlreadyAhead = campaign.alreadyAhead;
@@ -743,8 +1090,11 @@ namespace Savetrix
         report.questsMissing = campaign.missing;
         report.questsFailed = campaign.failed;
 
+        report.hudRefreshQueued = QueueSafeHudRefresh();
+        WriteImportReport(profile, preflight, report);
+
         spdlog::info(
-            "Import complete: perks={}, spells={}, suspiciousPerksSkipped={}, suspiciousSpellsSkipped={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, questsUnsafe={}, questsFailed={}",
+            "Import complete: perks={}, spells={}, suspiciousPerksSkipped={}, suspiciousSpellsSkipped={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, mainQuestDeferred={}, questsUnsafe={}, questsFailed={}, hudRefreshQueued={}",
             report.perksAdded,
             report.spellsAdded,
             report.suspiciousPerksSkipped,
@@ -755,15 +1105,18 @@ namespace Savetrix
             report.missingForms,
             report.unsafeFormsSkipped,
             report.questsRestored,
+            report.mainQuestDeferred,
             report.questsSkippedUnsafe,
-            report.questsFailed);
+            report.questsFailed,
+            report.hudRefreshQueued);
 
         std::ostringstream message;
-        message << "Savetrix V2.1.1: import concluido. Suspeitos ignorados: "
+        message << "Savetrix V2.2: import concluido. Suspeitos ignorados: "
                 << (report.suspiciousPerksSkipped + report.suspiciousSpellsSkipped)
                 << ". Quests: " << report.questsRestored
-                << " restauradas, " << report.questsSkippedUnsafe << " protegidas, "
-                << report.questsFailed << " falharam. Salve e recarregue.";
+                << " restauradas, " << report.mainQuestDeferred << " main quest adiadas, "
+                << report.questsSkippedUnsafe << " protegidas, "
+                << report.questsFailed << " falharam. Relatorio: last_import_report.json. Salve e recarregue.";
         Notify(message.str());
         return true;
     }

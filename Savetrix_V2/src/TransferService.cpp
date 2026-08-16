@@ -1,15 +1,19 @@
 #include "TransferService.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <RE/Skyrim.h>
@@ -51,28 +55,170 @@ namespace
                (a_form->GetFormFlags() & RE::TESForm::RecordFlags::kNonPlayable) != 0;
     }
 
-    bool SafeTransferPerk(const RE::BGSPerk* a_perk)
+    enum class TransferDisposition
     {
-        return Portable(a_perk) &&
-               a_perk->data.playable &&
-               !a_perk->data.hidden &&
-               !IsNonPlayable(a_perk);
+        kSafe,
+        kSuspicious,
+        kSkip
+    };
+
+    struct TransferClassification
+    {
+        TransferDisposition disposition{ TransferDisposition::kSkip };
+        std::string reason;
+    };
+
+    std::string Lower(std::string_view a_value)
+    {
+        std::string out(a_value);
+        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return out;
     }
 
-    bool SafeTransferSpell(const RE::SpellItem* a_spell)
+    bool ContainsAny(std::string_view a_text, const std::initializer_list<std::string_view>& a_tokens)
     {
-        if (!Portable(a_spell) || IsNonPlayable(a_spell)) {
+        const auto lower = Lower(a_text);
+        for (const auto token : a_tokens) {
+            if (lower.find(token) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template <class T>
+    std::string ClassificationText(const T* a_form)
+    {
+        if (!a_form) {
+            return {};
+        }
+
+        std::string text;
+        if (const auto* name = a_form->GetName(); name && *name) {
+            text += name;
+        }
+        if (const auto* editor = a_form->GetFormEditorID(); editor && *editor) {
+            if (!text.empty()) {
+                text.push_back(' ');
+            }
+            text += editor;
+        }
+        return text;
+    }
+
+    bool IsOfficialPlugin(const RE::TESForm* a_form)
+    {
+        if (!a_form) {
             return false;
+        }
+        const auto* file = a_form->GetFile(0);
+        if (!file) {
+            return false;
+        }
+        const auto* filename = file->GetFilename();
+        if (!filename || !*filename) {
+            return false;
+        }
+        const auto plugin = Lower(filename);
+        return plugin == "skyrim.esm" ||
+               plugin == "update.esm" ||
+               plugin == "dawnguard.esm" ||
+               plugin == "hearthfires.esm" ||
+               plugin == "dragonborn.esm";
+    }
+
+    TransferClassification ClassifyPerk(const RE::BGSPerk* a_perk)
+    {
+        if (!Portable(a_perk)) {
+            return { TransferDisposition::kSkip, "non_portable" };
+        }
+        if (!a_perk->data.playable || a_perk->data.hidden || IsNonPlayable(a_perk)) {
+            return { TransferDisposition::kSkip, "non_playable_or_hidden" };
+        }
+
+        const auto text = ClassificationText(a_perk);
+        if (text.empty()) {
+            return { TransferDisposition::kSuspicious, "unnamed_playable_perk" };
+        }
+
+        if (!IsOfficialPlugin(a_perk) &&
+            ContainsAny(text, {
+                "controller",
+                "manager",
+                "handler",
+                "framework",
+                "internal",
+                "dummy",
+                "debug",
+                "monitor",
+                "tracking",
+                "suppression perk",
+                "animation perk",
+                "interaction icons",
+                "event perk",
+                "state perk"
+            })) {
+            return { TransferDisposition::kSuspicious, "technical_name_pattern" };
+        }
+
+        return { TransferDisposition::kSafe, {} };
+    }
+
+    TransferClassification ClassifySpell(const RE::SpellItem* a_spell)
+    {
+        if (!Portable(a_spell)) {
+            return { TransferDisposition::kSkip, "non_portable" };
+        }
+        if (IsNonPlayable(a_spell)) {
+            return { TransferDisposition::kSkip, "non_playable" };
         }
 
         switch (a_spell->GetSpellType()) {
         case RE::MagicSystem::SpellType::kSpell:
         case RE::MagicSystem::SpellType::kPower:
         case RE::MagicSystem::SpellType::kLesserPower:
-            return true;
+            break;
         default:
-            return false;
+            return { TransferDisposition::kSkip, "unsupported_spell_type" };
         }
+
+        const auto text = ClassificationText(a_spell);
+        if (text.empty()) {
+            return { TransferDisposition::kSuspicious, "unnamed_spell" };
+        }
+
+        if (!IsOfficialPlugin(a_spell) &&
+            ContainsAny(text, {
+                "apply ",
+                "(target)",
+                "(self)",
+                "controller",
+                "manager",
+                "handler",
+                "framework",
+                "internal",
+                "dummy",
+                "debug",
+                "test spell",
+                "monitor",
+                "tracking",
+                "initializer",
+                "initialize ",
+                "bootstrap",
+                "refresh spell",
+                "reset spell"
+            })) {
+            return { TransferDisposition::kSuspicious, "technical_name_pattern" };
+        }
+
+        return { TransferDisposition::kSafe, {} };
+    }
+
+    bool IsSafePolicy(std::string_view a_policy)
+    {
+        return a_policy == "safe";
     }
 
     bool SafeTransferInventoryItem(
@@ -210,20 +356,34 @@ namespace Savetrix
         spdlog::info("Export checkpoint: skills OK");
 
         // Perks can live on the player's changed NPC base and/or in the runtime-added list.
-        // Merge both sources and preserve the highest observed rank.
+        // V2.1.1 classifies portable perks as safe or suspicious. Suspicious perks remain
+        // visible in profile.json for auditing, but F11 will not restore them automatically.
         std::map<std::string, PerkState> perkMap;
-        const auto mergePerk = [&perkMap](RE::BGSPerk* a_perk, std::int8_t a_rank) {
-            if (!SafeTransferPerk(a_perk)) {
+        std::size_t perkSafe = 0;
+        std::size_t perkSuspicious = 0;
+        std::size_t perkSkipped = 0;
+        const auto mergePerk = [&perkMap, &perkSkipped](RE::BGSPerk* a_perk, std::int8_t a_rank) {
+            const auto classification = ClassifyPerk(a_perk);
+            if (classification.disposition == TransferDisposition::kSkip) {
+                ++perkSkipped;
                 return;
             }
+
             auto ref = MakeFormRef(a_perk);
             if (ref.empty()) {
+                ++perkSkipped;
                 return;
             }
+
             const auto key = FormKey(ref);
             auto& slot = perkMap[key];
             slot.form = std::move(ref);
             slot.rank = std::max(slot.rank, a_rank);
+
+            if (classification.disposition == TransferDisposition::kSuspicious) {
+                slot.transferPolicy = "suspicious";
+                slot.safetyReason = classification.reason;
+            }
         };
 
         for (std::uint32_t i = 0; i < base->perkCount; ++i) {
@@ -235,18 +395,40 @@ namespace Savetrix
             }
         }
         for (auto& [_, perk] : perkMap) {
+            if (perk.transferPolicy == "suspicious") {
+                ++perkSuspicious;
+            } else {
+                ++perkSafe;
+            }
             profile.perks.push_back(std::move(perk));
         }
-        spdlog::info("Export checkpoint: perks OK ({})", profile.perks.size());
+        spdlog::info(
+            "Export checkpoint: perks OK (safe={}, suspicious={}, skipped={})",
+            perkSafe,
+            perkSuspicious,
+            perkSkipped);
 
-        std::map<std::string, FormRef> spellMap;
-        const auto mergeSpell = [&spellMap](RE::SpellItem* a_spell) {
-            if (!SafeTransferSpell(a_spell)) {
+        std::map<std::string, SpellState> spellMap;
+        std::size_t spellSkipped = 0;
+        const auto mergeSpell = [&spellMap, &spellSkipped](RE::SpellItem* a_spell) {
+            const auto classification = ClassifySpell(a_spell);
+            if (classification.disposition == TransferDisposition::kSkip) {
+                ++spellSkipped;
                 return;
             }
+
             auto ref = MakeFormRef(a_spell);
-            if (!ref.empty()) {
-                spellMap.emplace(FormKey(ref), std::move(ref));
+            if (ref.empty()) {
+                ++spellSkipped;
+                return;
+            }
+
+            const auto key = FormKey(ref);
+            auto& slot = spellMap[key];
+            slot.form = std::move(ref);
+            if (classification.disposition == TransferDisposition::kSuspicious) {
+                slot.transferPolicy = "suspicious";
+                slot.safetyReason = classification.reason;
             }
         };
 
@@ -288,11 +470,23 @@ namespace Savetrix
         for (auto* spell : player->GetActorRuntimeData().addedSpells) {
             mergeSpell(spell);
         }
-        for (auto& [_, ref] : spellMap) {
-            profile.spells.push_back(std::move(ref));
+        std::size_t spellSafe = 0;
+        std::size_t spellSuspicious = 0;
+        for (auto& [_, spell] : spellMap) {
+            if (spell.transferPolicy == "suspicious") {
+                ++spellSuspicious;
+            } else {
+                ++spellSafe;
+            }
+            profile.spells.push_back(std::move(spell));
         }
 
-        spdlog::info("Export checkpoint: spells/shouts OK (spells={}, shouts={})", profile.spells.size(), profile.shouts.size());
+        spdlog::info(
+            "Export checkpoint: spells/shouts OK (spellSafe={}, spellSuspicious={}, spellSkipped={}, shouts={})",
+            spellSafe,
+            spellSuspicious,
+            spellSkipped,
+            profile.shouts.size());
 
         profile.quests = ExportCampaignState();
         spdlog::info("Export checkpoint: campaign OK ({})", profile.quests.size());
@@ -347,7 +541,7 @@ namespace Savetrix
             }
 
             spdlog::info("Exported '{}' level {} with {} quest snapshots to {}", profile.characterName, profile.stats.level, profile.quests.size(), target.string());
-            Notify("Savetrix V2: personagem + campanha exportados. F11 importa.");
+            Notify("Savetrix V2.1.1: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
             return true;
         } catch (const std::exception& e) {
             spdlog::error("Export failed: {}", e.what());
@@ -412,11 +606,29 @@ namespace Savetrix
                 spdlog::warn("Missing perk {} / {}", perkState.form.plugin, perkState.form.editorID);
                 continue;
             }
-            if (!SafeTransferPerk(perk)) {
+
+            const auto runtimeClassification = ClassifyPerk(perk);
+            if (runtimeClassification.disposition == TransferDisposition::kSkip) {
                 ++report.unsafeFormsSkipped;
-                spdlog::info("Skipping non-playable/hidden perk {} / {}", perkState.form.plugin, perkState.form.name);
+                spdlog::info(
+                    "Skipping unsafe perk {} / {} ({})",
+                    perkState.form.plugin,
+                    perkState.form.name,
+                    runtimeClassification.reason);
                 continue;
             }
+            if (!IsSafePolicy(perkState.transferPolicy) ||
+                runtimeClassification.disposition == TransferDisposition::kSuspicious) {
+                ++report.suspiciousPerksSkipped;
+                spdlog::info(
+                    "Skipping suspicious perk {} / {} (profileReason='{}', runtimeReason='{}')",
+                    perkState.form.plugin,
+                    perkState.form.name,
+                    perkState.safetyReason,
+                    runtimeClassification.reason);
+                continue;
+            }
+
             const auto exportedRank = std::max<std::int8_t>(perkState.rank, 0);
             const auto currentRank = FindPerkRank(player, perk);
             if (!currentRank || *currentRank < exportedRank) {
@@ -425,18 +637,36 @@ namespace Savetrix
             }
         }
 
-        for (const auto& spellRef : profile.spells) {
-            auto* spell = ResolveFormAs<RE::SpellItem>(spellRef);
+        for (const auto& spellState : profile.spells) {
+            auto* spell = ResolveFormAs<RE::SpellItem>(spellState.form);
             if (!spell) {
                 ++report.missingForms;
-                spdlog::warn("Missing spell {} / {}", spellRef.plugin, spellRef.editorID);
+                spdlog::warn("Missing spell {} / {}", spellState.form.plugin, spellState.form.editorID);
                 continue;
             }
-            if (!SafeTransferSpell(spell)) {
+
+            const auto runtimeClassification = ClassifySpell(spell);
+            if (runtimeClassification.disposition == TransferDisposition::kSkip) {
                 ++report.unsafeFormsSkipped;
-                spdlog::info("Skipping technical/non-playable spell {} / {}", spellRef.plugin, spellRef.name);
+                spdlog::info(
+                    "Skipping unsafe spell {} / {} ({})",
+                    spellState.form.plugin,
+                    spellState.form.name,
+                    runtimeClassification.reason);
                 continue;
             }
+            if (!IsSafePolicy(spellState.transferPolicy) ||
+                runtimeClassification.disposition == TransferDisposition::kSuspicious) {
+                ++report.suspiciousSpellsSkipped;
+                spdlog::info(
+                    "Skipping suspicious spell {} / {} (profileReason='{}', runtimeReason='{}')",
+                    spellState.form.plugin,
+                    spellState.form.name,
+                    spellState.safetyReason,
+                    runtimeClassification.reason);
+                continue;
+            }
+
             if (!player->HasSpell(spell)) {
                 if (player->AddSpell(spell)) {
                     ++report.spellsAdded;
@@ -514,9 +744,11 @@ namespace Savetrix
         report.questsFailed = campaign.failed;
 
         spdlog::info(
-            "Import complete: perks={}, spells={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, questsUnsafe={}, questsFailed={}",
+            "Import complete: perks={}, spells={}, suspiciousPerksSkipped={}, suspiciousSpellsSkipped={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, questsUnsafe={}, questsFailed={}",
             report.perksAdded,
             report.spellsAdded,
+            report.suspiciousPerksSkipped,
+            report.suspiciousSpellsSkipped,
             report.shoutsAdded,
             report.wordsUnlocked,
             report.inventoryStacksAdded,
@@ -527,7 +759,9 @@ namespace Savetrix
             report.questsFailed);
 
         std::ostringstream message;
-        message << "Savetrix V2: import concluido. Quests: " << report.questsRestored
+        message << "Savetrix V2.1.1: import concluido. Suspeitos ignorados: "
+                << (report.suspiciousPerksSkipped + report.suspiciousSpellsSkipped)
+                << ". Quests: " << report.questsRestored
                 << " restauradas, " << report.questsSkippedUnsafe << " protegidas, "
                 << report.questsFailed << " falharam. Salve e recarregue.";
         Notify(message.str());

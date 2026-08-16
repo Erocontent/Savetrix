@@ -28,12 +28,9 @@ FetchContent_MakeAvailable(CommonLibSSE)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
-add_commonlibsse_plugin(
+add_library(
     Savetrix
-    NAME "Savetrix"
-    AUTHOR "OpenAI"
-    VERSION ${PROJECT_VERSION}
-    SOURCES
+    SHARED
         src/main.cpp
         src/TransferService.cpp
         src/TransferService.h
@@ -52,6 +49,7 @@ add_commonlibsse_plugin(
 target_link_libraries(
     Savetrix
     PRIVATE
+        CommonLibSSE::CommonLibSSE
         nlohmann_json::nlohmann_json
 )
 

@@ -8,6 +8,13 @@
 
 #include "InputSink.h"
 
+SKSEPluginInfo(
+    .Version = { 2, 0, 0, 0 },
+    .Name = "Savetrix",
+    .Author = "OpenAI",
+    .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary
+);
+
 namespace
 {
     void InitializeLog()

@@ -1,421 +1,458 @@
-#include "TransferService.h"
+#include "CampaignTransfer.h"
 
 #include <algorithm>
-#include <chrono>
+#include <array>
+#include <cctype>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
-#include <map>
-#include <optional>
+#include <initializer_list>
+#include <limits>
 #include <sstream>
 #include <string>
-#include <system_error>
+#include <string_view>
 
 #include <RE/Skyrim.h>
-#include <REL/Relocation.h>
 #include <spdlog/spdlog.h>
 
-#include "CampaignTransfer.h"
 #include "FormRef.h"
-#include "Paths.h"
-#include "Profile.h"
 
 namespace
 {
-    std::string TimestampUtc()
+    using QuestType = RE::QUEST_DATA::Type;
+
+    std::string Lower(std::string_view a_value)
     {
-        const auto now = std::chrono::system_clock::now();
-        const auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm tm{};
-        gmtime_s(&tm, &time);
-        std::ostringstream out;
-        out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-        return out.str();
+        std::string out(a_value);
+        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return out;
     }
 
-    std::string FormKey(const Savetrix::FormRef& a_ref)
+    bool IsOfficialPlugin(const RE::TESQuest* a_quest)
     {
-        return a_ref.plugin + ":" + std::to_string(a_ref.localFormID) + ":" + a_ref.editorID;
-    }
-
-    bool Portable(const RE::TESForm* a_form)
-    {
-        return a_form && !a_form->IsDynamicForm() && a_form->GetFile(0) != nullptr;
-    }
-
-    RE::TESNPC* GetPlayerBase(RE::PlayerCharacter* a_player)
-    {
-        return a_player ? a_player->GetActorBase() : nullptr;
-    }
-
-    RE::ActorValueOwner* GetPlayerActorValueOwner(RE::PlayerCharacter* a_player)
-    {
-        // ActorValueOwner is a secondary base whose offset changes between Skyrim runtimes.
-        // CommonLibSSE-NG's runtime accessor must be used in a cross-runtime plugin.
-        return a_player ? a_player->AsActorValueOwner() : nullptr;
-    }
-
-    RE::PlayerCharacter::PlayerSkills::Data* GetSkillData(RE::PlayerCharacter* a_player)
-    {
-        if (!a_player) {
-            return nullptr;
+        if (!a_quest) {
+            return false;
         }
-        auto& info = a_player->GetInfoRuntimeData();
-        return info.skills ? info.skills->data : nullptr;
+        const auto* file = a_quest->GetFile(0);
+        if (!file) {
+            return false;
+        }
+        const auto name = Lower(file->GetFilename());
+        return name == "skyrim.esm" || name == "dawnguard.esm" || name == "dragonborn.esm";
     }
 
-    std::optional<std::int8_t> FindPerkRank(RE::PlayerCharacter* a_player, RE::BGSPerk* a_perk)
+    bool IsCampaignType(QuestType a_type)
     {
-        if (!a_player || !a_perk) {
-            return std::nullopt;
+        switch (a_type) {
+        case QuestType::kMainQuest:
+        case QuestType::kMagesGuild:
+        case QuestType::kThievesGuild:
+        case QuestType::kDarkBrotherhood:
+        case QuestType::kCompanionsQuest:
+        case QuestType::kCivilWar:
+        case QuestType::kDLC01_Vampire:
+        case QuestType::kDLC02_Dragonborn:
+            return true;
+        default:
+            return false;
         }
-        std::optional<std::int8_t> rank;
-        if (auto* base = a_player->GetActorBase()) {
-            for (std::uint32_t i = 0; i < base->perkCount; ++i) {
-                const auto& entry = base->perks[i];
-                if (entry.perk == a_perk) {
-                    rank = rank ? std::max(*rank, entry.currentRank) : entry.currentRank;
+    }
+
+    std::string CategoryFor(QuestType a_type)
+    {
+        switch (a_type) {
+        case QuestType::kMainQuest: return "main";
+        case QuestType::kMagesGuild: return "college";
+        case QuestType::kThievesGuild: return "thieves";
+        case QuestType::kDarkBrotherhood: return "dark_brotherhood";
+        case QuestType::kCompanionsQuest: return "companions";
+        case QuestType::kCivilWar: return "civil_war";
+        case QuestType::kDLC01_Vampire: return "dawnguard";
+        case QuestType::kDLC02_Dragonborn: return "dragonborn";
+        default: return "other";
+        }
+    }
+
+    int CategoryOrder(std::string_view a_category)
+    {
+        static constexpr std::array<std::string_view, 8> kOrder{
+            "main", "companions", "college", "thieves", "dark_brotherhood", "dawnguard", "dragonborn", "civil_war"
+        };
+        const auto it = std::find(kOrder.begin(), kOrder.end(), a_category);
+        return it == kOrder.end() ? 999 : static_cast<int>(std::distance(kOrder.begin(), it));
+    }
+
+    bool BlacklistedForAutomaticRestore(const RE::TESQuest* a_quest)
+    {
+        if (!a_quest) {
+            return true;
+        }
+        const auto* editor = a_quest->GetFormEditorID();
+        if (!editor || !*editor) {
+            return true;
+        }
+        const auto id = Lower(editor);
+
+        // These quests directly control the tutorial/civil-war world state or contain
+        // mutually-exclusive decisions that V2 does not attempt to reconstruct.
+        return id == "mq101" || id == "mq102" || id == "mq102b" || id == "mq302" ||
+               id == "mqpaarthurnax" || id == "dbdestroy";
+    }
+
+
+    bool MatchesStorylineWhitelist(const RE::TESQuest* a_quest)
+    {
+        if (!a_quest) {
+            return false;
+        }
+        const auto* editor = a_quest->GetFormEditorID();
+        if (!editor || !*editor) {
+            return false;
+        }
+        const auto id = Lower(editor);
+
+        const auto equalsAny = [&id](std::initializer_list<std::string_view> values) {
+            return std::ranges::any_of(values, [&id](std::string_view value) { return id == value; });
+        };
+
+        switch (a_quest->GetType()) {
+        case QuestType::kMainQuest:
+            return equalsAny({
+                "mq103", "mq104", "mq105", "mq105ustengrav", "mq106",
+                "mq201", "mq202", "mq203", "mq204", "mq205", "mq206",
+                "mq301", "mq303", "mq304", "mq305"
+            });
+        case QuestType::kMagesGuild:
+            return equalsAny({ "mg01", "mg02", "mg03", "mg04", "mg05", "mg06", "mg07", "mg08" });
+        case QuestType::kThievesGuild:
+            return equalsAny({
+                "tg00", "tg01", "tg02", "tg03", "tg04", "tg05", "tg06", "tg07",
+                "tg08a", "tg08b", "tg09", "tgleadership"
+            });
+        case QuestType::kDarkBrotherhood:
+            return equalsAny({
+                "db01", "db02", "db03", "db04", "db05", "db06", "db07", "db08",
+                "db09", "db10", "db11", "dbdestroy"
+            });
+        case QuestType::kCompanionsQuest:
+            return equalsAny({ "c00", "c01", "c03", "c04", "c05", "c06" });
+        case QuestType::kDLC01_Vampire:
+            return id.starts_with("dlc1vq");
+        case QuestType::kDLC02_Dragonborn:
+            return id.starts_with("dlc2mq");
+        default:
+            return false;
+        }
+    }
+
+    bool IsAutomaticallyRestorable(const RE::TESQuest* a_quest)
+    {
+        if (!a_quest || !IsOfficialPlugin(a_quest) || !IsCampaignType(a_quest->GetType())) {
+            return false;
+        }
+        if (a_quest->GetType() == QuestType::kCivilWar ||
+            a_quest->GetType() == QuestType::kDLC01_Vampire ||
+            BlacklistedForAutomaticRestore(a_quest)) {
+            // Civil War and Dawnguard are decision/world-state heavy. V2 exports them
+            // for reporting, but does not replay them automatically.
+            return false;
+        }
+        if (!MatchesStorylineWhitelist(a_quest)) {
+            return false;
+        }
+        if (a_quest->data.flags.all(RE::QuestFlag::kAllowRepeatStages)) {
+            return false;
+        }
+        return true;
+    }
+
+    int StoryRank(std::string_view a_category, std::string_view a_editorID)
+    {
+        const auto id = Lower(a_editorID);
+
+        const auto rankIn = [&id](const auto& chain) -> int {
+            const auto it = std::find(chain.begin(), chain.end(), id);
+            return it == chain.end() ? -1 : static_cast<int>(std::distance(chain.begin(), it));
+        };
+
+        if (a_category == "main") {
+            // MQ101/MQ102 are bootstrap quests and intentionally omitted. Season Unending
+            // appears as MQ102B on some runtimes/mod setups and MQ302 on others.
+            static constexpr std::array<std::string_view, 16> chain{
+                "mq103", "mq104", "mq105", "mq106",
+                "mq201", "mq202", "mq203", "mq204", "mq205", "mq206",
+                "mq301", "mq102b", "mq302", "mq303", "mq304", "mq305"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "college") {
+            static constexpr std::array<std::string_view, 8> chain{
+                "mg01", "mg02", "mg03", "mg04", "mg05", "mg06", "mg07", "mg08"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "thieves") {
+            static constexpr std::array<std::string_view, 12> chain{
+                "tg00", "tg01", "tg02", "tg03", "tg04", "tg05",
+                "tg06", "tg07", "tg08a", "tg08b", "tg09", "tgleadership"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "dark_brotherhood") {
+            static constexpr std::array<std::string_view, 11> chain{
+                "db01", "db02", "db03", "db04", "db05", "db06",
+                "db07", "db08", "db09", "db10", "db11"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "companions") {
+            static constexpr std::array<std::string_view, 6> chain{
+                "c00", "c01", "c03", "c04", "c05", "c06"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "dragonborn") {
+            static constexpr std::array<std::string_view, 7> chain{
+                "dlc2mq01", "dlc2mq02", "dlc2mq03", "dlc2mq04",
+                "dlc2mq05", "dlc2mq06", "dlc2mq06post"
+            };
+            return rankIn(chain);
+        }
+
+        return -1;
+    }
+
+    void ApplyQuestChainSafety(std::vector<Savetrix::QuestState>& a_states)
+    {
+        static constexpr std::array<std::string_view, 6> categories{
+            "main", "college", "thieves", "dark_brotherhood", "companions", "dragonborn"
+        };
+
+        for (const auto category : categories) {
+            int firstUnsafeCompleted = std::numeric_limits<int>::max();
+
+            for (const auto& state : a_states) {
+                if (!state.completed || state.category != category) {
+                    continue;
+                }
+
+                const auto rank = StoryRank(category, state.form.editorID);
+                if (rank >= 0 && !state.restorable) {
+                    firstUnsafeCompleted = std::min(firstUnsafeCompleted, rank);
+                }
+            }
+
+            if (firstUnsafeCompleted == std::numeric_limits<int>::max()) {
+                continue;
+            }
+
+            for (auto& state : a_states) {
+                if (!state.completed || !state.restorable || state.category != category) {
+                    continue;
+                }
+
+                const auto rank = StoryRank(category, state.form.editorID);
+                if (rank > firstUnsafeCompleted) {
+                    spdlog::info(
+                        "Campaign safety: protecting {} because an earlier quest in {} cannot be safely replayed",
+                        state.form.editorID,
+                        category);
+                    state.restorable = false;
                 }
             }
         }
-        for (auto* entry : a_player->GetPlayerRuntimeData().addedPerks) {
-            if (entry && entry->perk == a_perk) {
-                rank = rank ? std::max(*rank, entry->currentRank) : entry->currentRank;
+
+        // Destroy the Dark Brotherhood is mutually exclusive with the normal DB chain.
+        // Until V3 records explicit branch decisions, never replay either branch around it.
+        const bool destroyedBrotherhood = std::ranges::any_of(a_states, [](const Savetrix::QuestState& state) {
+            return state.completed && Lower(state.form.editorID) == "dbdestroy";
+        });
+        if (destroyedBrotherhood) {
+            for (auto& state : a_states) {
+                if (state.category == "dark_brotherhood") {
+                    state.restorable = false;
+                }
             }
         }
-        return rank;
+    }
+
+    std::string QuestSortKey(const Savetrix::QuestState& a_state)
+    {
+        std::ostringstream out;
+        out << std::setw(3) << std::setfill('0') << CategoryOrder(a_state.category) << ':'
+            << Lower(a_state.form.editorID) << ':' << std::hex << a_state.form.localFormID;
+        return out.str();
+    }
+
+    std::string SetStageCommand(RE::TESQuest* a_quest, std::uint16_t a_stage)
+    {
+        std::ostringstream out;
+        out << "setstage " << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+            << a_quest->GetFormID() << std::dec << ' ' << a_stage;
+        return out.str();
+    }
+
+    bool ExecuteCommand(RE::Script* a_script, RE::TESObjectREFR* a_target, std::string_view a_command)
+    {
+        if (!a_script) {
+            return false;
+        }
+        try {
+            a_script->SetCommand(a_command);
+            a_script->CompileAndRun(a_target, RE::COMPILER_NAME::kSystemWindowCompiler);
+            a_script->ClearCommand();
+            return true;
+        } catch (...) {
+            a_script->ClearCommand();
+            return false;
+        }
     }
 }
 
 namespace Savetrix
 {
-    TransferService& TransferService::GetSingleton()
+    std::vector<QuestState> ExportCampaignState()
     {
-        static TransferService singleton;
-        return singleton;
+        std::vector<QuestState> result;
+        auto* handler = RE::TESDataHandler::GetSingleton();
+        if (!handler) {
+            spdlog::warn("Campaign export: TESDataHandler unavailable");
+            return result;
+        }
+
+        for (auto* quest : handler->GetFormArray<RE::TESQuest>()) {
+            if (!quest || !IsOfficialPlugin(quest) || !IsCampaignType(quest->GetType())) {
+                continue;
+            }
+
+            const auto stage = quest->GetCurrentStageID();
+            const bool completed = quest->IsCompleted();
+            const bool active = quest->IsActive();
+            const bool running = quest->IsRunning();
+            if (stage == 0 && !completed && !active) {
+                continue;
+            }
+
+            QuestState state;
+            state.form = MakeFormRef(quest);
+            if (state.form.empty()) {
+                continue;
+            }
+            state.category = CategoryFor(quest->GetType());
+            state.stage = stage;
+            state.completed = completed;
+            state.active = active;
+            state.running = running;
+            state.restorable = IsAutomaticallyRestorable(quest);
+            result.push_back(std::move(state));
+        }
+
+        ApplyQuestChainSafety(result);
+
+        std::ranges::sort(result, [](const QuestState& a, const QuestState& b) {
+            return QuestSortKey(a) < QuestSortKey(b);
+        });
+
+        spdlog::info("Campaign export: {} quest snapshots", result.size());
+        return result;
     }
 
-    void TransferService::Notify(const std::string& a_text)
+    CampaignImportReport ImportCampaignState(const std::vector<QuestState>& a_quests)
     {
-        spdlog::info("{}", a_text);
-    }
-
-    bool TransferService::ExportCurrentCharacter()
-    {
+        CampaignImportReport report;
         auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* base = GetPlayerBase(player);
-        auto* actorValues = GetPlayerActorValueOwner(player);
-        auto* skillData = GetSkillData(player);
-        if (!player || !base || !actorValues || !skillData) {
-            spdlog::error("Export failed: player data unavailable");
-            Notify("Savetrix: falha ao ler o personagem.");
-            return false;
+        if (!player) {
+            report.failed = a_quests.size();
+            return report;
         }
 
-        Profile profile;
-        profile.exportedAtUtc = TimestampUtc();
-        profile.runtimeVersion = REL::Module::get().version().string();
-        profile.characterName = player->GetName();
-        profile.stats.level = static_cast<std::uint16_t>(std::clamp<std::uint32_t>(player->GetLevel(), 1, 65535));
-        spdlog::info("Export checkpoint: reading actor values");
-        profile.stats.healthBase = actorValues->GetBaseActorValue(RE::ActorValue::kHealth);
-        profile.stats.magickaBase = actorValues->GetBaseActorValue(RE::ActorValue::kMagicka);
-        profile.stats.staminaBase = actorValues->GetBaseActorValue(RE::ActorValue::kStamina);
-        profile.stats.dragonSouls = actorValues->GetActorValue(RE::ActorValue::kDragonSouls);
-        profile.stats.playerXp = skillData->xp;
-        profile.stats.playerLevelThreshold = skillData->levelThreshold;
-        profile.stats.perkPoints = player->GetGameStatsData().perkCount;
-        spdlog::info("Export checkpoint: core stats OK");
-
-        for (std::size_t i = 0; i < kSkillCount; ++i) {
-            profile.skills[i].level = skillData->skills[i].level;
-            profile.skills[i].xp = skillData->skills[i].xp;
-            profile.skills[i].levelThreshold = skillData->skills[i].levelThreshold;
-            profile.skills[i].legendaryLevel = skillData->legendaryLevels[i];
+        // A valid runtime-created Script form is used to run the game's own SetStage console
+        // command. That path executes the quest stage machinery/fragments instead of merely
+        // overwriting TESQuest::currentStage.
+        auto* commandScript = RE::IFormFactory::Create<RE::Script>();
+        if (!commandScript) {
+            spdlog::error("Campaign import: could not create command Script form");
+            report.failed = a_quests.size();
+            return report;
         }
 
-        spdlog::info("Export checkpoint: skills OK");
-
-        // Perks can live on the player's changed NPC base and/or in the runtime-added list.
-        // Merge both sources and preserve the highest observed rank.
-        std::map<std::string, PerkState> perkMap;
-        const auto mergePerk = [&perkMap](RE::BGSPerk* a_perk, std::int8_t a_rank) {
-            if (!Portable(a_perk)) {
-                return;
-            }
-            auto ref = MakeFormRef(a_perk);
-            if (ref.empty()) {
-                return;
-            }
-            const auto key = FormKey(ref);
-            auto& slot = perkMap[key];
-            slot.form = std::move(ref);
-            slot.rank = std::max(slot.rank, a_rank);
-        };
-
-        for (std::uint32_t i = 0; i < base->perkCount; ++i) {
-            mergePerk(base->perks[i].perk, base->perks[i].currentRank);
-        }
-        for (auto* rankData : player->GetPlayerRuntimeData().addedPerks) {
-            if (rankData) {
-                mergePerk(rankData->perk, rankData->currentRank);
+        auto ordered = a_quests;
+        // Re-evaluate each record against the currently installed Skyrim data. This protects
+        // profiles exported by earlier V2 builds whose "restorable" flag was too permissive.
+        for (auto& state : ordered) {
+            if (auto* quest = ResolveFormAs<RE::TESQuest>(state.form)) {
+                state.restorable = state.restorable && IsAutomaticallyRestorable(quest);
+            } else {
+                state.restorable = false;
             }
         }
-        for (auto& [_, perk] : perkMap) {
-            profile.perks.push_back(std::move(perk));
-        }
-        spdlog::info("Export checkpoint: perks OK ({})", profile.perks.size());
+        ApplyQuestChainSafety(ordered);
 
-        if (auto* effects = base->GetSpellList(); effects) {
-            if (effects->numSpells > 0 && !effects->spells) {
-                spdlog::warn("Export: spell count is non-zero but spell array is null; skipping spells");
-            }
-            for (std::uint32_t i = 0; effects->spells && i < effects->numSpells; ++i) {
-                auto* spell = effects->spells[i];
-                if (Portable(spell)) {
-                    auto ref = MakeFormRef(spell);
-                    if (!ref.empty()) {
-                        profile.spells.push_back(std::move(ref));
-                    }
-                }
-            }
+        std::ranges::sort(ordered, [](const QuestState& a, const QuestState& b) {
+            return QuestSortKey(a) < QuestSortKey(b);
+        });
 
-            if (effects->numShouts > 0 && !effects->shouts) {
-                spdlog::warn("Export: shout count is non-zero but shout array is null; skipping shouts");
-            }
-            for (std::uint32_t i = 0; effects->shouts && i < effects->numShouts; ++i) {
-                auto* shout = effects->shouts[i];
-                if (!Portable(shout)) {
-                    continue;
-                }
-                ShoutState shoutState;
-                shoutState.form = MakeFormRef(shout);
-                if (shoutState.form.empty()) {
-                    continue;
-                }
-                for (std::size_t w = 0; w < shoutState.words.size(); ++w) {
-                    auto* word = shout->variations[w].word;
-                    if (Portable(word)) {
-                        shoutState.words[w].form = MakeFormRef(word);
-                        shoutState.words[w].known = word->GetKnown();
-                    }
-                }
-                profile.shouts.push_back(std::move(shoutState));
-            }
-        }
-
-        spdlog::info("Export checkpoint: spells/shouts OK (spells={}, shouts={})", profile.spells.size(), profile.shouts.size());
-
-        profile.quests = ExportCampaignState();
-        spdlog::info("Export checkpoint: campaign OK ({})", profile.quests.size());
-
-        for (const auto& [object, count] : player->GetInventoryCounts()) {
-            if (!object || count <= 0 || !Portable(object)) {
+        for (const auto& state : ordered) {
+            // V2 only replays completed quest milestones. In-progress quest restoration is
+            // deliberately deferred because aliases/objective state are not portable enough.
+            if (!state.completed) {
+                ++report.skippedInProgress;
                 continue;
             }
-            InventoryState item;
-            item.form = MakeFormRef(object);
-            item.count = count;
-            if (!item.form.empty()) {
-                profile.inventory.push_back(std::move(item));
-            }
-        }
-
-        spdlog::info("Export checkpoint: inventory OK ({})", profile.inventory.size());
-
-        try {
-            std::filesystem::create_directories(Paths::ProfileDirectory());
-            const auto target = Paths::ProfilePath();
-            const auto temp = target.string() + ".tmp";
-            {
-                std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-                if (!out) {
-                    throw std::runtime_error("cannot open temporary profile file");
-                }
-                const nlohmann::json json = profile;
-                out << json.dump(2) << '\n';
-                out.flush();
-                if (!out) {
-                    throw std::runtime_error("cannot write profile file");
-                }
-            }
-            std::error_code ec;
-            std::filesystem::remove(target, ec);
-            ec.clear();
-            std::filesystem::rename(temp, target, ec);
-            if (ec) {
-                throw std::system_error(ec, "cannot replace profile file");
-            }
-
-            spdlog::info("Exported '{}' level {} with {} quest snapshots to {}", profile.characterName, profile.stats.level, profile.quests.size(), target.string());
-            Notify("Savetrix V2: personagem + campanha exportados. F11 importa.");
-            return true;
-        } catch (const std::exception& e) {
-            spdlog::error("Export failed: {}", e.what());
-            Notify("Savetrix: erro ao gravar profile.json.");
-            return false;
-        }
-    }
-
-    bool TransferService::ImportCurrentCharacter()
-    {
-        Profile profile;
-        try {
-            std::ifstream in(Paths::ProfilePath(), std::ios::binary);
-            if (!in) {
-                Notify("Savetrix: profile.json nao encontrado. Use F10 primeiro.");
-                return false;
-            }
-            nlohmann::json json;
-            in >> json;
-            profile = json.get<Profile>();
-        } catch (const std::exception& e) {
-            spdlog::error("Import parse failed: {}", e.what());
-            Notify("Savetrix: profile.json invalido ou incompatível.");
-            return false;
-        }
-
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* base = GetPlayerBase(player);
-        auto* actorValues = GetPlayerActorValueOwner(player);
-        auto* skillData = GetSkillData(player);
-        if (!player || !base || !actorValues || !skillData) {
-            Notify("Savetrix: falha ao acessar o personagem atual.");
-            return false;
-        }
-
-        ImportReport report;
-
-        // Character layer: same non-destructive V1 behavior. Campaign milestones are restored afterwards.
-        base->actorData.level = std::clamp<std::uint16_t>(profile.stats.level, 1, 65535);
-        actorValues->SetBaseActorValue(RE::ActorValue::kHealth, std::max(1.0F, profile.stats.healthBase));
-        actorValues->SetBaseActorValue(RE::ActorValue::kMagicka, std::max(0.0F, profile.stats.magickaBase));
-        actorValues->SetBaseActorValue(RE::ActorValue::kStamina, std::max(0.0F, profile.stats.staminaBase));
-        actorValues->SetActorValue(RE::ActorValue::kDragonSouls, std::max(0.0F, profile.stats.dragonSouls));
-        player->GetGameStatsData().perkCount = profile.stats.perkPoints;
-
-        skillData->xp = std::max(0.0F, profile.stats.playerXp);
-        skillData->levelThreshold = std::max(0.0F, profile.stats.playerLevelThreshold);
-        for (std::size_t i = 0; i < kSkillCount; ++i) {
-            skillData->skills[i].level = std::clamp(profile.skills[i].level, 0.0F, 100.0F);
-            skillData->skills[i].xp = std::max(0.0F, profile.skills[i].xp);
-            skillData->skills[i].levelThreshold = std::max(0.0F, profile.skills[i].levelThreshold);
-            skillData->legendaryLevels[i] = profile.skills[i].legendaryLevel;
-        }
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kBaseData));
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kAttributes));
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kNPCSkills));
-
-        for (const auto& perkState : profile.perks) {
-            auto* perk = ResolveFormAs<RE::BGSPerk>(perkState.form);
-            if (!perk) {
-                ++report.missingForms;
-                spdlog::warn("Missing perk {} / {}", perkState.form.plugin, perkState.form.editorID);
-                continue;
-            }
-            const auto exportedRank = std::max<std::int8_t>(perkState.rank, 0);
-            const auto currentRank = FindPerkRank(player, perk);
-            if (!currentRank || *currentRank < exportedRank) {
-                player->AddPerk(perk, static_cast<std::uint32_t>(exportedRank));
-                ++report.perksAdded;
-            }
-        }
-
-        for (const auto& spellRef : profile.spells) {
-            auto* spell = ResolveFormAs<RE::SpellItem>(spellRef);
-            if (!spell) {
-                ++report.missingForms;
-                spdlog::warn("Missing spell {} / {}", spellRef.plugin, spellRef.editorID);
-                continue;
-            }
-            if (!player->HasSpell(spell)) {
-                if (player->AddSpell(spell)) {
-                    ++report.spellsAdded;
-                }
-            }
-        }
-
-        for (const auto& shoutState : profile.shouts) {
-            auto* shout = ResolveFormAs<RE::TESShout>(shoutState.form);
-            if (!shout) {
-                ++report.missingForms;
-                spdlog::warn("Missing shout {} / {}", shoutState.form.plugin, shoutState.form.editorID);
-                continue;
-            }
-            if (!player->HasShout(shout)) {
-                if (player->AddShout(shout)) {
-                    ++report.shoutsAdded;
-                }
-            }
-            for (const auto& wordState : shoutState.words) {
-                if (!wordState.known || wordState.form.empty()) {
-                    continue;
-                }
-                auto* word = ResolveFormAs<RE::TESWordOfPower>(wordState.form);
-                if (!word) {
-                    ++report.missingForms;
-                    continue;
-                }
-                if (!word->GetKnown()) {
-                    player->UnlockWord(word);
-                    ++report.wordsUnlocked;
-                }
-            }
-        }
-
-        // Non-destructive inventory import: only tops current stacks up to exported counts.
-        // It never removes target-save items/quest items and it does not duplicate on repeated imports.
-        const auto currentCounts = player->GetInventoryCounts();
-        for (const auto& itemState : profile.inventory) {
-            if (itemState.count <= 0) {
-                continue;
-            }
-            auto* object = ResolveFormAs<RE::TESBoundObject>(itemState.form);
-            if (!object) {
-                ++report.missingForms;
-                spdlog::warn("Missing inventory form {} / {}", itemState.form.plugin, itemState.form.editorID);
+            if (!state.restorable || state.category == "civil_war") {
+                ++report.skippedUnsafe;
                 continue;
             }
 
-            std::int32_t current = 0;
-            if (const auto it = currentCounts.find(object); it != currentCounts.end()) {
-                current = it->second;
+            auto* quest = ResolveFormAs<RE::TESQuest>(state.form);
+            if (!quest) {
+                ++report.missing;
+                spdlog::warn("Campaign import missing quest {} / {}", state.form.plugin, state.form.editorID);
+                continue;
             }
-            const auto delta = itemState.count - current;
-            if (delta > 0) {
-                player->AddObjectToContainer(object, nullptr, delta, nullptr);
-                ++report.inventoryStacksAdded;
+            if (!IsAutomaticallyRestorable(quest)) {
+                ++report.skippedUnsafe;
+                continue;
+            }
+            if (quest->IsCompleted()) {
+                ++report.alreadyComplete;
+                continue;
+            }
+            if (quest->GetCurrentStageID() > state.stage) {
+                ++report.alreadyAhead;
+                continue;
+            }
+            if (state.stage == 0) {
+                ++report.skippedUnsafe;
+                continue;
+            }
+
+            if (quest->IsStopped() && quest->eventID == RE::QuestEvent::kNone) {
+                quest->Start();
+            }
+
+            const auto command = SetStageCommand(quest, state.stage);
+            spdlog::info("Campaign import: {}", command);
+            if (!ExecuteCommand(commandScript, player, command)) {
+                ++report.failed;
+                continue;
+            }
+
+            if (quest->IsCompleted() || quest->GetCurrentStageID() >= state.stage) {
+                ++report.restored;
+            } else {
+                ++report.failed;
+                spdlog::warn(
+                    "Campaign import verification failed for {} targetStage={} currentStage={} completed={}",
+                    state.form.editorID,
+                    state.stage,
+                    quest->GetCurrentStageID(),
+                    quest->IsCompleted());
             }
         }
 
-
-        const auto campaign = ImportCampaignState(profile.quests);
-        report.questsRestored = campaign.restored;
-        report.questsAlreadyComplete = campaign.alreadyComplete;
-        report.questsAlreadyAhead = campaign.alreadyAhead;
-        report.questsSkippedInProgress = campaign.skippedInProgress;
-        report.questsSkippedUnsafe = campaign.skippedUnsafe;
-        report.questsMissing = campaign.missing;
-        report.questsFailed = campaign.failed;
-
-        spdlog::info(
-            "Import complete: perks={}, spells={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, questsRestored={}, questsUnsafe={}, questsFailed={}",
-            report.perksAdded,
-            report.spellsAdded,
-            report.shoutsAdded,
-            report.wordsUnlocked,
-            report.inventoryStacksAdded,
-            report.missingForms,
-            report.questsRestored,
-            report.questsSkippedUnsafe,
-            report.questsFailed);
-
-        std::ostringstream message;
-        message << "Savetrix V2: import concluido. Quests: " << report.questsRestored
-                << " restauradas, " << report.questsSkippedUnsafe << " protegidas, "
-                << report.questsFailed << " falharam. Salve e recarregue.";
-        Notify(message.str());
-        return true;
+        commandScript->ClearCommand();
+        return report;
     }
 }

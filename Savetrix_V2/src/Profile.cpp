@@ -39,8 +39,37 @@ namespace Savetrix
         j.at("perkPoints").get_to(v.perkPoints);
     }
 
-    void to_json(nlohmann::json& j, const PerkState& v) { j = { { "form", v.form }, { "rank", v.rank } }; }
-    void from_json(const nlohmann::json& j, PerkState& v) { j.at("form").get_to(v.form); j.at("rank").get_to(v.rank); }
+    void to_json(nlohmann::json& j, const PerkState& v)
+    {
+        j = {
+            { "form", v.form },
+            { "rank", v.rank },
+            { "transferPolicy", v.transferPolicy },
+            { "safetyReason", v.safetyReason }
+        };
+    }
+    void from_json(const nlohmann::json& j, PerkState& v)
+    {
+        j.at("form").get_to(v.form);
+        j.at("rank").get_to(v.rank);
+        v.transferPolicy = j.value("transferPolicy", std::string{ "safe" });
+        v.safetyReason = j.value("safetyReason", std::string{});
+    }
+
+    void to_json(nlohmann::json& j, const SpellState& v)
+    {
+        j = {
+            { "form", v.form },
+            { "transferPolicy", v.transferPolicy },
+            { "safetyReason", v.safetyReason }
+        };
+    }
+    void from_json(const nlohmann::json& j, SpellState& v)
+    {
+        j.at("form").get_to(v.form);
+        v.transferPolicy = j.value("transferPolicy", std::string{ "safe" });
+        v.safetyReason = j.value("safetyReason", std::string{});
+    }
 
     void to_json(nlohmann::json& j, const WordState& v) { j = { { "form", v.form }, { "known", v.known } }; }
     void from_json(const nlohmann::json& j, WordState& v) { j.at("form").get_to(v.form); v.known = j.value("known", false); }
@@ -105,7 +134,7 @@ namespace Savetrix
         j.at("stats").get_to(v.stats);
         j.at("skills").get_to(v.skills);
         v.perks = j.value("perks", std::vector<PerkState>{});
-        v.spells = j.value("spells", std::vector<FormRef>{});
+        v.spells = j.value("spells", std::vector<SpellState>{});
         v.shouts = j.value("shouts", std::vector<ShoutState>{});
         v.inventory = j.value("inventory", std::vector<InventoryState>{});
         v.quests = j.value("quests", std::vector<QuestState>{});

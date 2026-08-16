@@ -13,6 +13,7 @@ namespace Savetrix
         std::size_t wordsUnlocked{};
         std::size_t inventoryStacksAdded{};
         std::size_t missingForms{};
+        std::size_t unsafeFormsSkipped{};
         std::size_t questsRestored{};
         std::size_t questsAlreadyComplete{};
         std::size_t questsAlreadyAhead{};

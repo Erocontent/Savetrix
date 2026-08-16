@@ -13,7 +13,6 @@
 #include <system_error>
 
 #include <RE/Skyrim.h>
-#include <RE/M/Misc.h>
 #include <REL/Relocation.h>
 #include <spdlog/spdlog.h>
 
@@ -48,6 +47,13 @@ namespace
     RE::TESNPC* GetPlayerBase(RE::PlayerCharacter* a_player)
     {
         return a_player ? a_player->GetActorBase() : nullptr;
+    }
+
+    RE::ActorValueOwner* GetPlayerActorValueOwner(RE::PlayerCharacter* a_player)
+    {
+        // ActorValueOwner is a secondary base whose offset changes between Skyrim runtimes.
+        // CommonLibSSE-NG's runtime accessor must be used in a cross-runtime plugin.
+        return a_player ? a_player->AsActorValueOwner() : nullptr;
     }
 
     RE::PlayerCharacter::PlayerSkills::Data* GetSkillData(RE::PlayerCharacter* a_player)
@@ -91,16 +97,17 @@ namespace Savetrix
     }
 
     void TransferService::Notify(const std::string& a_text)
-{
-    spdlog::info("{}", a_text);
-}
+    {
+        spdlog::info("{}", a_text);
+    }
 
     bool TransferService::ExportCurrentCharacter()
     {
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* base = GetPlayerBase(player);
+        auto* actorValues = GetPlayerActorValueOwner(player);
         auto* skillData = GetSkillData(player);
-        if (!player || !base || !skillData) {
+        if (!player || !base || !actorValues || !skillData) {
             spdlog::error("Export failed: player data unavailable");
             Notify("Savetrix: falha ao ler o personagem.");
             return false;
@@ -111,13 +118,15 @@ namespace Savetrix
         profile.runtimeVersion = REL::Module::get().version().string();
         profile.characterName = player->GetName();
         profile.stats.level = static_cast<std::uint16_t>(std::clamp<std::uint32_t>(player->GetLevel(), 1, 65535));
-        profile.stats.healthBase = player->GetBaseActorValue(RE::ActorValue::kHealth);
-        profile.stats.magickaBase = player->GetBaseActorValue(RE::ActorValue::kMagicka);
-        profile.stats.staminaBase = player->GetBaseActorValue(RE::ActorValue::kStamina);
-        profile.stats.dragonSouls = player->GetActorValue(RE::ActorValue::kDragonSouls);
+        spdlog::info("Export checkpoint: reading actor values");
+        profile.stats.healthBase = actorValues->GetBaseActorValue(RE::ActorValue::kHealth);
+        profile.stats.magickaBase = actorValues->GetBaseActorValue(RE::ActorValue::kMagicka);
+        profile.stats.staminaBase = actorValues->GetBaseActorValue(RE::ActorValue::kStamina);
+        profile.stats.dragonSouls = actorValues->GetActorValue(RE::ActorValue::kDragonSouls);
         profile.stats.playerXp = skillData->xp;
         profile.stats.playerLevelThreshold = skillData->levelThreshold;
         profile.stats.perkPoints = player->GetGameStatsData().perkCount;
+        spdlog::info("Export checkpoint: core stats OK");
 
         for (std::size_t i = 0; i < kSkillCount; ++i) {
             profile.skills[i].level = skillData->skills[i].level;
@@ -125,6 +134,8 @@ namespace Savetrix
             profile.skills[i].levelThreshold = skillData->skills[i].levelThreshold;
             profile.skills[i].legendaryLevel = skillData->legendaryLevels[i];
         }
+
+        spdlog::info("Export checkpoint: skills OK");
 
         // Perks can live on the player's changed NPC base and/or in the runtime-added list.
         // Merge both sources and preserve the highest observed rank.
@@ -154,9 +165,13 @@ namespace Savetrix
         for (auto& [_, perk] : perkMap) {
             profile.perks.push_back(std::move(perk));
         }
+        spdlog::info("Export checkpoint: perks OK ({})", profile.perks.size());
 
         if (auto* effects = base->GetSpellList(); effects) {
-            for (std::uint32_t i = 0; i < effects->numSpells; ++i) {
+            if (effects->numSpells > 0 && !effects->spells) {
+                spdlog::warn("Export: spell count is non-zero but spell array is null; skipping spells");
+            }
+            for (std::uint32_t i = 0; effects->spells && i < effects->numSpells; ++i) {
                 auto* spell = effects->spells[i];
                 if (Portable(spell)) {
                     auto ref = MakeFormRef(spell);
@@ -166,7 +181,10 @@ namespace Savetrix
                 }
             }
 
-            for (std::uint32_t i = 0; i < effects->numShouts; ++i) {
+            if (effects->numShouts > 0 && !effects->shouts) {
+                spdlog::warn("Export: shout count is non-zero but shout array is null; skipping shouts");
+            }
+            for (std::uint32_t i = 0; effects->shouts && i < effects->numShouts; ++i) {
                 auto* shout = effects->shouts[i];
                 if (!Portable(shout)) {
                     continue;
@@ -187,7 +205,10 @@ namespace Savetrix
             }
         }
 
+        spdlog::info("Export checkpoint: spells/shouts OK (spells={}, shouts={})", profile.spells.size(), profile.shouts.size());
+
         profile.quests = ExportCampaignState();
+        spdlog::info("Export checkpoint: campaign OK ({})", profile.quests.size());
 
         for (const auto& [object, count] : player->GetInventoryCounts()) {
             if (!object || count <= 0 || !Portable(object)) {
@@ -200,6 +221,8 @@ namespace Savetrix
                 profile.inventory.push_back(std::move(item));
             }
         }
+
+        spdlog::info("Export checkpoint: inventory OK ({})", profile.inventory.size());
 
         try {
             std::filesystem::create_directories(Paths::ProfileDirectory());
@@ -255,8 +278,9 @@ namespace Savetrix
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* base = GetPlayerBase(player);
+        auto* actorValues = GetPlayerActorValueOwner(player);
         auto* skillData = GetSkillData(player);
-        if (!player || !base || !skillData) {
+        if (!player || !base || !actorValues || !skillData) {
             Notify("Savetrix: falha ao acessar o personagem atual.");
             return false;
         }
@@ -265,10 +289,10 @@ namespace Savetrix
 
         // Character layer: same non-destructive V1 behavior. Campaign milestones are restored afterwards.
         base->actorData.level = std::clamp<std::uint16_t>(profile.stats.level, 1, 65535);
-        player->SetBaseActorValue(RE::ActorValue::kHealth, std::max(1.0F, profile.stats.healthBase));
-        player->SetBaseActorValue(RE::ActorValue::kMagicka, std::max(0.0F, profile.stats.magickaBase));
-        player->SetBaseActorValue(RE::ActorValue::kStamina, std::max(0.0F, profile.stats.staminaBase));
-        player->SetActorValue(RE::ActorValue::kDragonSouls, std::max(0.0F, profile.stats.dragonSouls));
+        actorValues->SetBaseActorValue(RE::ActorValue::kHealth, std::max(1.0F, profile.stats.healthBase));
+        actorValues->SetBaseActorValue(RE::ActorValue::kMagicka, std::max(0.0F, profile.stats.magickaBase));
+        actorValues->SetBaseActorValue(RE::ActorValue::kStamina, std::max(0.0F, profile.stats.staminaBase));
+        actorValues->SetActorValue(RE::ActorValue::kDragonSouls, std::max(0.0F, profile.stats.dragonSouls));
         player->GetGameStatsData().perkCount = profile.stats.perkPoints;
 
         skillData->xp = std::max(0.0F, profile.stats.playerXp);

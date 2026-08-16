@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <initializer_list>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -95,7 +96,8 @@ namespace
 
         // These quests directly control the tutorial/civil-war world state or contain
         // mutually-exclusive decisions that V2 does not attempt to reconstruct.
-        return id == "mq101" || id == "mq102" || id == "mq302" || id == "mqpaarthurnax";
+        return id == "mq101" || id == "mq102" || id == "mq102b" || id == "mq302" ||
+               id == "mqpaarthurnax" || id == "dbdestroy";
     }
 
 
@@ -149,7 +151,11 @@ namespace
         if (!a_quest || !IsOfficialPlugin(a_quest) || !IsCampaignType(a_quest->GetType())) {
             return false;
         }
-        if (a_quest->GetType() == QuestType::kCivilWar || BlacklistedForAutomaticRestore(a_quest)) {
+        if (a_quest->GetType() == QuestType::kCivilWar ||
+            a_quest->GetType() == QuestType::kDLC01_Vampire ||
+            BlacklistedForAutomaticRestore(a_quest)) {
+            // Civil War and Dawnguard are decision/world-state heavy. V2 exports them
+            // for reporting, but does not replay them automatically.
             return false;
         }
         if (!MatchesStorylineWhitelist(a_quest)) {
@@ -159,6 +165,116 @@ namespace
             return false;
         }
         return true;
+    }
+
+    int StoryRank(std::string_view a_category, std::string_view a_editorID)
+    {
+        const auto id = Lower(a_editorID);
+
+        const auto rankIn = [&id](const auto& chain) -> int {
+            const auto it = std::find(chain.begin(), chain.end(), id);
+            return it == chain.end() ? -1 : static_cast<int>(std::distance(chain.begin(), it));
+        };
+
+        if (a_category == "main") {
+            // MQ101/MQ102 are bootstrap quests and intentionally omitted. Season Unending
+            // appears as MQ102B on some runtimes/mod setups and MQ302 on others.
+            static constexpr std::array<std::string_view, 16> chain{
+                "mq103", "mq104", "mq105", "mq106",
+                "mq201", "mq202", "mq203", "mq204", "mq205", "mq206",
+                "mq301", "mq102b", "mq302", "mq303", "mq304", "mq305"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "college") {
+            static constexpr std::array<std::string_view, 8> chain{
+                "mg01", "mg02", "mg03", "mg04", "mg05", "mg06", "mg07", "mg08"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "thieves") {
+            static constexpr std::array<std::string_view, 12> chain{
+                "tg00", "tg01", "tg02", "tg03", "tg04", "tg05",
+                "tg06", "tg07", "tg08a", "tg08b", "tg09", "tgleadership"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "dark_brotherhood") {
+            static constexpr std::array<std::string_view, 11> chain{
+                "db01", "db02", "db03", "db04", "db05", "db06",
+                "db07", "db08", "db09", "db10", "db11"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "companions") {
+            static constexpr std::array<std::string_view, 6> chain{
+                "c00", "c01", "c03", "c04", "c05", "c06"
+            };
+            return rankIn(chain);
+        }
+        if (a_category == "dragonborn") {
+            static constexpr std::array<std::string_view, 7> chain{
+                "dlc2mq01", "dlc2mq02", "dlc2mq03", "dlc2mq04",
+                "dlc2mq05", "dlc2mq06", "dlc2mq06post"
+            };
+            return rankIn(chain);
+        }
+
+        return -1;
+    }
+
+    void ApplyQuestChainSafety(std::vector<Savetrix::QuestState>& a_states)
+    {
+        static constexpr std::array<std::string_view, 6> categories{
+            "main", "college", "thieves", "dark_brotherhood", "companions", "dragonborn"
+        };
+
+        for (const auto category : categories) {
+            int firstUnsafeCompleted = std::numeric_limits<int>::max();
+
+            for (const auto& state : a_states) {
+                if (!state.completed || state.category != category) {
+                    continue;
+                }
+
+                const auto rank = StoryRank(category, state.form.editorID);
+                if (rank >= 0 && !state.restorable) {
+                    firstUnsafeCompleted = std::min(firstUnsafeCompleted, rank);
+                }
+            }
+
+            if (firstUnsafeCompleted == std::numeric_limits<int>::max()) {
+                continue;
+            }
+
+            for (auto& state : a_states) {
+                if (!state.completed || !state.restorable || state.category != category) {
+                    continue;
+                }
+
+                const auto rank = StoryRank(category, state.form.editorID);
+                if (rank > firstUnsafeCompleted) {
+                    spdlog::info(
+                        "Campaign safety: protecting {} because an earlier quest in {} cannot be safely replayed",
+                        state.form.editorID,
+                        category);
+                    state.restorable = false;
+                }
+            }
+        }
+
+        // Destroy the Dark Brotherhood is mutually exclusive with the normal DB chain.
+        // Until V3 records explicit branch decisions, never replay either branch around it.
+        const bool destroyedBrotherhood = std::ranges::any_of(a_states, [](const Savetrix::QuestState& state) {
+            return state.completed && Lower(state.form.editorID) == "dbdestroy";
+        });
+        if (destroyedBrotherhood) {
+            for (auto& state : a_states) {
+                if (state.category == "dark_brotherhood") {
+                    state.restorable = false;
+                }
+            }
+        }
     }
 
     std::string QuestSortKey(const Savetrix::QuestState& a_state)
@@ -232,6 +348,8 @@ namespace Savetrix
             result.push_back(std::move(state));
         }
 
+        ApplyQuestChainSafety(result);
+
         std::ranges::sort(result, [](const QuestState& a, const QuestState& b) {
             return QuestSortKey(a) < QuestSortKey(b);
         });
@@ -260,6 +378,17 @@ namespace Savetrix
         }
 
         auto ordered = a_quests;
+        // Re-evaluate each record against the currently installed Skyrim data. This protects
+        // profiles exported by earlier V2 builds whose "restorable" flag was too permissive.
+        for (auto& state : ordered) {
+            if (auto* quest = ResolveFormAs<RE::TESQuest>(state.form)) {
+                state.restorable = state.restorable && IsAutomaticallyRestorable(quest);
+            } else {
+                state.restorable = false;
+            }
+        }
+        ApplyQuestChainSafety(ordered);
+
         std::ranges::sort(ordered, [](const QuestState& a, const QuestState& b) {
             return QuestSortKey(a) < QuestSortKey(b);
         });

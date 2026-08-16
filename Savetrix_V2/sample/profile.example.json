@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 2,
+  "modVersion": "2.0.0",
+  "exportedAtUtc": "2026-08-16T05:00:00Z",
+  "runtimeVersion": "1.6.x",
+  "characterName": "Dragonborn",
+  "stats": {
+    "level": 42,
+    "healthBase": 350.0,
+    "magickaBase": 180.0,
+    "staminaBase": 260.0,
+    "dragonSouls": 6.0,
+    "playerXp": 781.2,
+    "playerLevelThreshold": 1200.0,
+    "perkPoints": 3
+  },
+  "skills": [
+    {
+      "level": 80.0,
+      "xp": 120.0,
+      "levelThreshold": 500.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 50.0,
+      "xp": 10.0,
+      "levelThreshold": 300.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 70.0,
+      "xp": 20.0,
+      "levelThreshold": 400.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 40.0,
+      "xp": 0.0,
+      "levelThreshold": 250.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 100.0,
+      "xp": 0.0,
+      "levelThreshold": 0.0,
+      "legendaryLevel": 1
+    },
+    {
+      "level": 60.0,
+      "xp": 0.0,
+      "levelThreshold": 350.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 30.0,
+      "xp": 0.0,
+      "levelThreshold": 200.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 25.0,
+      "xp": 0.0,
+      "levelThreshold": 180.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 45.0,
+      "xp": 0.0,
+      "levelThreshold": 270.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 55.0,
+      "xp": 0.0,
+      "levelThreshold": 320.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 35.0,
+      "xp": 0.0,
+      "levelThreshold": 220.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 65.0,
+      "xp": 0.0,
+      "levelThreshold": 370.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 30.0,
+      "xp": 0.0,
+      "levelThreshold": 200.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 30.0,
+      "xp": 0.0,
+      "levelThreshold": 200.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 35.0,
+      "xp": 0.0,
+      "levelThreshold": 220.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 25.0,
+      "xp": 0.0,
+      "levelThreshold": 180.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 40.0,
+      "xp": 0.0,
+      "levelThreshold": 250.0,
+      "legendaryLevel": 0
+    },
+    {
+      "level": 85.0,
+      "xp": 0.0,
+      "levelThreshold": 550.0,
+      "legendaryLevel": 0
+    }
+  ],
+  "perks": [],
+  "spells": [],
+  "shouts": [],
+  "inventory": [],
+  "quests": [
+    {
+      "form": {
+        "plugin": "Skyrim.esm",
+        "localFormID": 0,
+        "editorID": "MQ105",
+        "name": "The Way of the Voice"
+      },
+      "category": "main",
+      "stage": 200,
+      "completed": true,
+      "active": false,
+      "running": false,
+      "restorable": true
+    },
+    {
+      "form": {
+        "plugin": "Skyrim.esm",
+        "localFormID": 0,
+        "editorID": "MQ302",
+        "name": "Season Unending"
+      },
+      "category": "main",
+      "stage": 300,
+      "completed": true,
+      "active": false,
+      "running": false,
+      "restorable": false
+    }
+  ]
+}

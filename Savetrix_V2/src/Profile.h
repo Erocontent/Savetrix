@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -11,8 +12,8 @@
 
 namespace Savetrix
 {
-    inline constexpr std::uint32_t kSchemaVersion = 2;
-    inline constexpr std::string_view kModVersion = "2.0.0";
+    inline constexpr std::uint32_t kSchemaVersion = 3;
+    inline constexpr std::string_view kModVersion = "2.1.1";
     inline constexpr std::size_t kSkillCount = 18;
 
     struct SkillState
@@ -39,6 +40,15 @@ namespace Savetrix
     {
         FormRef form;
         std::int8_t rank{ 0 };
+        std::string transferPolicy{ "safe" };
+        std::string safetyReason;
+    };
+
+    struct SpellState
+    {
+        FormRef form;
+        std::string transferPolicy{ "safe" };
+        std::string safetyReason;
     };
 
     struct WordState
@@ -81,7 +91,7 @@ namespace Savetrix
         PlayerStats stats;
         std::array<SkillState, kSkillCount> skills{};
         std::vector<PerkState> perks;
-        std::vector<FormRef> spells;
+        std::vector<SpellState> spells;
         std::vector<ShoutState> shouts;
         std::vector<InventoryState> inventory;
         std::vector<QuestState> quests;
@@ -93,6 +103,8 @@ namespace Savetrix
     void from_json(const nlohmann::json& a_json, PlayerStats& a_value);
     void to_json(nlohmann::json& a_json, const PerkState& a_value);
     void from_json(const nlohmann::json& a_json, PerkState& a_value);
+    void to_json(nlohmann::json& a_json, const SpellState& a_value);
+    void from_json(const nlohmann::json& a_json, SpellState& a_value);
     void to_json(nlohmann::json& a_json, const WordState& a_value);
     void from_json(const nlohmann::json& a_json, WordState& a_value);
     void to_json(nlohmann::json& a_json, const ShoutState& a_value);

@@ -117,8 +117,8 @@ namespace
         if (!file) {
             return false;
         }
-        const auto* filename = file->GetFilename();
-        if (!filename || !*filename) {
+        const auto filename = file->GetFilename();
+        if (filename.empty()) {
             return false;
         }
         const auto plugin = Lower(filename);

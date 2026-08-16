@@ -21,8 +21,10 @@ namespace Savetrix
         std::size_t questsAlreadyAhead{};
         std::size_t questsSkippedInProgress{};
         std::size_t questsSkippedUnsafe{};
+        std::size_t mainQuestDeferred{};
         std::size_t questsMissing{};
         std::size_t questsFailed{};
+        bool hudRefreshQueued{};
     };
 
     class TransferService
@@ -36,5 +38,7 @@ namespace Savetrix
     private:
         TransferService() = default;
         static void Notify(const std::string& a_text);
+
+        bool importAppliedThisProcess_{ false };
     };
 }

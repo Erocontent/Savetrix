@@ -13,7 +13,7 @@
 namespace Savetrix
 {
     inline constexpr std::uint32_t kSchemaVersion = 3;
-    inline constexpr std::string_view kModVersion = "2.1.1";
+    inline constexpr std::string_view kModVersion = "2.2.0";
     inline constexpr std::size_t kSkillCount = 18;
 
     struct SkillState

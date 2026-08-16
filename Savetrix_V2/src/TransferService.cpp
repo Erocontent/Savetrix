@@ -91,9 +91,9 @@ namespace Savetrix
     }
 
     void TransferService::Notify(const std::string& a_text)
-    {
-        RE::DebugNotification(a_text.c_str(), nullptr, true);
-    }
+{
+    spdlog::info("{}", a_text);
+}
 
     bool TransferService::ExportCurrentCharacter()
     {

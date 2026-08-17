@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <memory>
+#include <string>
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -7,13 +8,8 @@
 #include <spdlog/spdlog.h>
 
 #include "InputSink.h"
-
-SKSEPluginInfo(
-    .Version = { 2, 0, 0, 0 },
-    .Name = "Savetrix",
-    .Author = "OpenAI",
-    .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary
-);
+#include "Profile.h"
+#include "Settings.h"
 
 namespace
 {
@@ -37,10 +33,16 @@ namespace
         if (!a_message) {
             return;
         }
+
         if (a_message->type == SKSE::MessagingInterface::kInputLoaded) {
             if (auto* manager = RE::BSInputDeviceManager::GetSingleton()) {
                 manager->AddEventSink(&Savetrix::InputSink::GetSingleton());
-                spdlog::info("Input sink registered. F10=export, F11=import");
+
+                const auto settings = Savetrix::Settings::GetSingleton().GetSnapshot();
+                spdlog::info(
+                    "Input sink registered. exportKey={}, importKey={}",
+                    settings.exportKey,
+                    settings.importKey);
             }
         }
     }
@@ -51,7 +53,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
     SKSE::Init(a_skse);
     InitializeLog();
 
-    spdlog::info("Savetrix 2.0.0 loading on runtime {}", REL::Module::get().version().string());
+    spdlog::info(
+        "Savetrix {} loading on runtime {}",
+        std::string(Savetrix::kModVersion),
+        REL::Module::get().version().string());
 
     if (auto* messaging = SKSE::GetMessagingInterface()) {
         messaging->RegisterListener(MessageHandler);

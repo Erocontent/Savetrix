@@ -2,6 +2,7 @@
 
 #include <dinput.h>
 
+#include "Settings.h"
 #include "TransferService.h"
 
 namespace Savetrix
@@ -29,15 +30,12 @@ namespace Savetrix
                 continue;
             }
 
-            switch (button->GetIDCode()) {
-            case DIK_F10:
+            const auto settings = Settings::GetSingleton().GetSnapshot();
+            const auto key = button->GetIDCode();
+            if (key == settings.exportKey) {
                 TransferService::GetSingleton().ExportCurrentCharacter();
-                break;
-            case DIK_F11:
+            } else if (key == settings.importKey) {
                 TransferService::GetSingleton().ImportCurrentCharacter();
-                break;
-            default:
-                break;
             }
         }
         return RE::BSEventNotifyControl::kContinue;

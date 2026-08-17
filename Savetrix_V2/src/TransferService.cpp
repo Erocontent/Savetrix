@@ -29,6 +29,7 @@
 #include "FormRef.h"
 #include "Paths.h"
 #include "Profile.h"
+#include "Settings.h"
 
 namespace
 {
@@ -281,23 +282,27 @@ namespace
         return std::isfinite(a_value) && a_value >= 0.0F;
     }
 
-    bool CoreProfileDataValid(const Savetrix::Profile& a_profile)
+    bool CoreProfileDataValid(const Savetrix::Profile& a_profile, const Savetrix::ImportOptions& a_options)
     {
-        if (a_profile.stats.level == 0 ||
-            !std::isfinite(a_profile.stats.healthBase) || a_profile.stats.healthBase <= 0.0F ||
-            !FiniteNonNegative(a_profile.stats.magickaBase) ||
-            !FiniteNonNegative(a_profile.stats.staminaBase) ||
-            !FiniteNonNegative(a_profile.stats.dragonSouls) ||
-            !FiniteNonNegative(a_profile.stats.playerXp) ||
-            !FiniteNonNegative(a_profile.stats.playerLevelThreshold)) {
-            return false;
+        if (a_options.stats) {
+            if (a_profile.stats.level == 0 ||
+                !std::isfinite(a_profile.stats.healthBase) || a_profile.stats.healthBase <= 0.0F ||
+                !FiniteNonNegative(a_profile.stats.magickaBase) ||
+                !FiniteNonNegative(a_profile.stats.staminaBase) ||
+                !FiniteNonNegative(a_profile.stats.dragonSouls) ||
+                !FiniteNonNegative(a_profile.stats.playerXp) ||
+                !FiniteNonNegative(a_profile.stats.playerLevelThreshold)) {
+                return false;
+            }
         }
 
-        for (const auto& skill : a_profile.skills) {
-            if (!std::isfinite(skill.level) ||
-                !FiniteNonNegative(skill.xp) ||
-                !FiniteNonNegative(skill.levelThreshold)) {
-                return false;
+        if (a_options.skills) {
+            for (const auto& skill : a_profile.skills) {
+                if (!std::isfinite(skill.level) ||
+                    !FiniteNonNegative(skill.xp) ||
+                    !FiniteNonNegative(skill.levelThreshold)) {
+                    return false;
+                }
             }
         }
         return true;
@@ -327,98 +332,108 @@ namespace
         return helgenResolved && beforeStormInitialized;
     }
 
-    PreflightReport RunPreflight(const Savetrix::Profile& a_profile)
+    PreflightReport RunPreflight(const Savetrix::Profile& a_profile, const Savetrix::ImportOptions& a_options)
     {
         PreflightReport report;
-        report.coreDataValid = CoreProfileDataValid(a_profile);
+        report.coreDataValid = CoreProfileDataValid(a_profile, a_options);
 
-        for (const auto& perkState : a_profile.perks) {
-            auto* perk = Savetrix::ResolveFormAs<RE::BGSPerk>(perkState.form);
-            if (!perk) {
-                RecordMissing(report, perkState.form);
-                continue;
-            }
-
-            const auto classification = ClassifyPerk(perk);
-            if (classification.disposition == TransferDisposition::kSkip) {
-                ++report.perksUnsafe;
-            } else if (!IsSafePolicy(perkState.transferPolicy) ||
-                       classification.disposition == TransferDisposition::kSuspicious) {
-                ++report.perksSuspicious;
-            } else {
-                ++report.perksSafe;
-            }
-        }
-
-        for (const auto& spellState : a_profile.spells) {
-            auto* spell = Savetrix::ResolveFormAs<RE::SpellItem>(spellState.form);
-            if (!spell) {
-                RecordMissing(report, spellState.form);
-                continue;
-            }
-
-            const auto classification = ClassifySpell(spell);
-            if (classification.disposition == TransferDisposition::kSkip) {
-                ++report.spellsUnsafe;
-            } else if (!IsSafePolicy(spellState.transferPolicy) ||
-                       classification.disposition == TransferDisposition::kSuspicious) {
-                ++report.spellsSuspicious;
-            } else {
-                ++report.spellsSafe;
-            }
-        }
-
-        for (const auto& shoutState : a_profile.shouts) {
-            auto* shout = Savetrix::ResolveFormAs<RE::TESShout>(shoutState.form);
-            if (!shout) {
-                RecordMissing(report, shoutState.form);
-                continue;
-            }
-            ++report.shoutsReady;
-
-            for (const auto& wordState : shoutState.words) {
-                if (!wordState.known || wordState.form.empty()) {
+        if (a_options.perks) {
+            for (const auto& perkState : a_profile.perks) {
+                auto* perk = Savetrix::ResolveFormAs<RE::BGSPerk>(perkState.form);
+                if (!perk) {
+                    RecordMissing(report, perkState.form);
                     continue;
                 }
-                if (!Savetrix::ResolveFormAs<RE::TESWordOfPower>(wordState.form)) {
-                    RecordMissing(report, wordState.form);
+
+                const auto classification = ClassifyPerk(perk);
+                if (classification.disposition == TransferDisposition::kSkip) {
+                    ++report.perksUnsafe;
+                } else if (!IsSafePolicy(perkState.transferPolicy) ||
+                           classification.disposition == TransferDisposition::kSuspicious) {
+                    ++report.perksSuspicious;
+                } else {
+                    ++report.perksSafe;
                 }
             }
         }
 
-        for (const auto& itemState : a_profile.inventory) {
-            if (itemState.count <= 0) {
-                continue;
-            }
+        if (a_options.spells) {
+            for (const auto& spellState : a_profile.spells) {
+                auto* spell = Savetrix::ResolveFormAs<RE::SpellItem>(spellState.form);
+                if (!spell) {
+                    RecordMissing(report, spellState.form);
+                    continue;
+                }
 
-            auto* object = Savetrix::ResolveFormAs<RE::TESBoundObject>(itemState.form);
-            if (!object) {
-                RecordMissing(report, itemState.form);
-                continue;
-            }
-            if (!SafeTransferInventoryItem(object, nullptr)) {
-                ++report.inventoryUnsafe;
-            } else {
-                ++report.inventoryReady;
+                const auto classification = ClassifySpell(spell);
+                if (classification.disposition == TransferDisposition::kSkip) {
+                    ++report.spellsUnsafe;
+                } else if (!IsSafePolicy(spellState.transferPolicy) ||
+                           classification.disposition == TransferDisposition::kSuspicious) {
+                    ++report.spellsSuspicious;
+                } else {
+                    ++report.spellsSafe;
+                }
             }
         }
 
-        for (const auto& questState : a_profile.quests) {
-            if (!questState.completed || !questState.restorable) {
-                continue;
-            }
+        if (a_options.shouts) {
+            for (const auto& shoutState : a_profile.shouts) {
+                auto* shout = Savetrix::ResolveFormAs<RE::TESShout>(shoutState.form);
+                if (!shout) {
+                    RecordMissing(report, shoutState.form);
+                    continue;
+                }
+                ++report.shoutsReady;
 
-            ++report.questCandidates;
-            if (questState.category == "main") {
-                ++report.mainQuestCandidates;
-            }
-            if (!Savetrix::ResolveFormAs<RE::TESQuest>(questState.form)) {
-                RecordMissing(report, questState.form);
+                for (const auto& wordState : shoutState.words) {
+                    if (!wordState.known || wordState.form.empty()) {
+                        continue;
+                    }
+                    if (!Savetrix::ResolveFormAs<RE::TESWordOfPower>(wordState.form)) {
+                        RecordMissing(report, wordState.form);
+                    }
+                }
             }
         }
 
-        if (report.mainQuestCandidates > 0) {
-            report.mainQuestReady = MainQuestBootstrapReady();
+        if (a_options.inventory) {
+            for (const auto& itemState : a_profile.inventory) {
+                if (itemState.count <= 0) {
+                    continue;
+                }
+
+                auto* object = Savetrix::ResolveFormAs<RE::TESBoundObject>(itemState.form);
+                if (!object) {
+                    RecordMissing(report, itemState.form);
+                    continue;
+                }
+                if (!SafeTransferInventoryItem(object, nullptr)) {
+                    ++report.inventoryUnsafe;
+                } else {
+                    ++report.inventoryReady;
+                }
+            }
+        }
+
+        if (a_options.quests) {
+            for (const auto& questState : a_profile.quests) {
+                if (!questState.completed || !questState.restorable) {
+                    continue;
+                }
+
+                ++report.questCandidates;
+                if (questState.category == "main") {
+                    ++report.mainQuestCandidates;
+                }
+                if (!Savetrix::ResolveFormAs<RE::TESQuest>(questState.form)) {
+                    RecordMissing(report, questState.form);
+                }
+            }
+
+            if (report.mainQuestCandidates > 0) {
+                report.mainQuestReady = MainQuestBootstrapReady();
+            }
         }
 
         return report;
@@ -469,6 +484,7 @@ namespace
 
     void WriteImportReport(
         const Savetrix::Profile& a_profile,
+        const Savetrix::SettingsSnapshot& a_settings,
         const PreflightReport& a_preflight,
         const Savetrix::ImportReport& a_report)
     {
@@ -478,12 +494,25 @@ namespace
                 a_preflight.missingPlugins.end());
 
             nlohmann::json json = {
-                { "reportVersion", 1 },
+                { "reportVersion", 3 },
                 { "savetrixVersion", std::string(Savetrix::kModVersion) },
                 { "generatedAtUtc", TimestampUtc() },
                 { "sourceCharacter", a_profile.characterName },
                 { "sourceRuntime", a_profile.runtimeVersion },
                 { "targetRuntime", REL::Module::get().version().string() },
+                { "controls", {
+                    { "exportKey", a_settings.exportKey },
+                    { "importKey", a_settings.importKey }
+                } },
+                { "importOptions", {
+                    { "stats", a_settings.import.stats },
+                    { "skills", a_settings.import.skills },
+                    { "perks", a_settings.import.perks },
+                    { "spells", a_settings.import.spells },
+                    { "shouts", a_settings.import.shouts },
+                    { "inventory", a_settings.import.inventory },
+                    { "quests", a_settings.import.quests }
+                } },
                 { "preflight", {
                     { "coreDataValid", a_preflight.coreDataValid },
                     { "perksSafe", a_preflight.perksSafe },
@@ -503,12 +532,16 @@ namespace
                 } },
                 { "import", {
                     { "perksAdded", a_report.perksAdded },
+                    { "perksAlreadyPresent", a_report.perksAlreadyPresent },
                     { "spellsAdded", a_report.spellsAdded },
+                    { "spellsAlreadyPresent", a_report.spellsAlreadyPresent },
                     { "suspiciousPerksSkipped", a_report.suspiciousPerksSkipped },
                     { "suspiciousSpellsSkipped", a_report.suspiciousSpellsSkipped },
                     { "shoutsAdded", a_report.shoutsAdded },
+                    { "shoutsAlreadyPresent", a_report.shoutsAlreadyPresent },
                     { "wordsUnlocked", a_report.wordsUnlocked },
                     { "inventoryStacksAdded", a_report.inventoryStacksAdded },
+                    { "inventoryStacksAlreadySatisfied", a_report.inventoryStacksAlreadySatisfied },
                     { "missingForms", a_report.missingForms },
                     { "unsafeFormsSkipped", a_report.unsafeFormsSkipped },
                     { "questsRestored", a_report.questsRestored },
@@ -519,9 +552,19 @@ namespace
                     { "mainQuestDeferred", a_report.mainQuestDeferred },
                     { "questsMissing", a_report.questsMissing },
                     { "questsFailed", a_report.questsFailed },
+                    { "categoriesApplied", {
+                        { "stats", a_report.statsImported },
+                        { "skills", a_report.skillsImported },
+                        { "perks", a_report.perksImported },
+                        { "spells", a_report.spellsImported },
+                        { "shouts", a_report.shoutsImported },
+                        { "inventory", a_report.inventoryImported },
+                        { "quests", a_report.questsImported }
+                    } },
                     { "hudRefreshQueued", a_report.hudRefreshQueued }
                 } },
-                { "recommendation", "save_and_reload" }
+                { "restartRequired", true },
+                { "recommendation", "save_quit_to_desktop_and_reload" }
             };
 
             std::filesystem::create_directories(Savetrix::Paths::ProfileDirectory());
@@ -857,7 +900,7 @@ namespace Savetrix
             }
 
             spdlog::info("Exported '{}' level {} with {} quest snapshots to {}", profile.characterName, profile.stats.level, profile.quests.size(), target.string());
-            Notify("Savetrix V2.2: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
+            Notify("Savetrix V2.3: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
             return true;
         } catch (const std::exception& e) {
             spdlog::error("Export failed: {}", e.what());
@@ -895,15 +938,22 @@ namespace Savetrix
 
         if (importAppliedThisProcess_) {
             spdlog::warn("Import blocked: F11 was already used successfully in this Skyrim process");
-            Notify("Savetrix V2.2: F11 ja foi usado nesta execucao. Salve, feche o Skyrim e abra novamente para outro import.");
+            Notify("Savetrix V2.3: F11 ja foi usado nesta execucao. Salve, feche o Skyrim e abra novamente para outro import.");
             return false;
         }
 
-        const auto preflight = RunPreflight(profile);
+        const auto settings = Settings::GetSingleton().GetSnapshot();
+        if (!settings.import.AnyEnabled()) {
+            spdlog::warn("Import blocked: all selective-import categories are disabled");
+            Notify("Savetrix V2.3: nenhuma categoria de importacao esta habilitada. Ative ao menos uma no MCM/INI.");
+            return false;
+        }
+
+        const auto preflight = RunPreflight(profile, settings.import);
         LogPreflight(preflight);
         if (!preflight.coreDataValid) {
             spdlog::error("Import blocked by preflight: invalid core numeric data");
-            Notify("Savetrix V2.2: preflight bloqueou o import por dados centrais invalidos.");
+            Notify("Savetrix V2.3: preflight bloqueou o import por dados centrais invalidos.");
             return false;
         }
 
@@ -916,26 +966,34 @@ namespace Savetrix
         ImportReport report;
         importAppliedThisProcess_ = true;
 
-        // Character layer: same non-destructive V1 behavior. Campaign milestones are restored afterwards.
-        base->actorData.level = std::clamp<std::uint16_t>(profile.stats.level, 1, 65535);
-        actorValues->SetBaseActorValue(RE::ActorValue::kHealth, std::max(1.0F, profile.stats.healthBase));
-        actorValues->SetBaseActorValue(RE::ActorValue::kMagicka, std::max(0.0F, profile.stats.magickaBase));
-        actorValues->SetBaseActorValue(RE::ActorValue::kStamina, std::max(0.0F, profile.stats.staminaBase));
-        actorValues->SetActorValue(RE::ActorValue::kDragonSouls, std::max(0.0F, profile.stats.dragonSouls));
-        player->GetGameStatsData().perkCount = profile.stats.perkPoints;
-
-        skillData->xp = std::max(0.0F, profile.stats.playerXp);
-        skillData->levelThreshold = std::max(0.0F, profile.stats.playerLevelThreshold);
-        for (std::size_t i = 0; i < kSkillCount; ++i) {
-            skillData->skills[i].level = std::clamp(profile.skills[i].level, 0.0F, 100.0F);
-            skillData->skills[i].xp = std::max(0.0F, profile.skills[i].xp);
-            skillData->skills[i].levelThreshold = std::max(0.0F, profile.skills[i].levelThreshold);
-            skillData->legendaryLevels[i] = profile.skills[i].legendaryLevel;
+        // Selective character import. Export always captures the full profile; F11 applies
+        // only the categories enabled in the MCM/INI settings.
+        if (settings.import.stats) {
+            base->actorData.level = std::clamp<std::uint16_t>(profile.stats.level, 1, 65535);
+            actorValues->SetBaseActorValue(RE::ActorValue::kHealth, std::max(1.0F, profile.stats.healthBase));
+            actorValues->SetBaseActorValue(RE::ActorValue::kMagicka, std::max(0.0F, profile.stats.magickaBase));
+            actorValues->SetBaseActorValue(RE::ActorValue::kStamina, std::max(0.0F, profile.stats.staminaBase));
+            actorValues->SetActorValue(RE::ActorValue::kDragonSouls, std::max(0.0F, profile.stats.dragonSouls));
+            player->GetGameStatsData().perkCount = profile.stats.perkPoints;
+            skillData->xp = std::max(0.0F, profile.stats.playerXp);
+            skillData->levelThreshold = std::max(0.0F, profile.stats.playerLevelThreshold);
+            base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kBaseData));
+            base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kAttributes));
+            report.statsImported = true;
         }
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kBaseData));
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kAttributes));
-        base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kNPCSkills));
 
+        if (settings.import.skills) {
+            for (std::size_t i = 0; i < kSkillCount; ++i) {
+                skillData->skills[i].level = std::clamp(profile.skills[i].level, 0.0F, 100.0F);
+                skillData->skills[i].xp = std::max(0.0F, profile.skills[i].xp);
+                skillData->skills[i].levelThreshold = std::max(0.0F, profile.skills[i].levelThreshold);
+                skillData->legendaryLevels[i] = profile.skills[i].legendaryLevel;
+            }
+            base->AddChange(static_cast<std::uint32_t>(RE::TESNPC::ChangeFlags::kNPCSkills));
+            report.skillsImported = true;
+        }
+
+        if (settings.import.perks) {
         for (const auto& perkState : profile.perks) {
             auto* perk = ResolveFormAs<RE::BGSPerk>(perkState.form);
             if (!perk) {
@@ -971,9 +1029,14 @@ namespace Savetrix
             if (!currentRank || *currentRank < exportedRank) {
                 player->AddPerk(perk, static_cast<std::uint32_t>(exportedRank));
                 ++report.perksAdded;
+            } else {
+                ++report.perksAlreadyPresent;
             }
         }
 
+            report.perksImported = true;
+        }
+        if (settings.import.spells) {
         for (const auto& spellState : profile.spells) {
             auto* spell = ResolveFormAs<RE::SpellItem>(spellState.form);
             if (!spell) {
@@ -1008,9 +1071,14 @@ namespace Savetrix
                 if (player->AddSpell(spell)) {
                     ++report.spellsAdded;
                 }
+            } else {
+                ++report.spellsAlreadyPresent;
             }
         }
 
+            report.spellsImported = true;
+        }
+        if (settings.import.shouts) {
         for (const auto& shoutState : profile.shouts) {
             auto* shout = ResolveFormAs<RE::TESShout>(shoutState.form);
             if (!shout) {
@@ -1022,6 +1090,8 @@ namespace Savetrix
                 if (player->AddShout(shout)) {
                     ++report.shoutsAdded;
                 }
+            } else {
+                ++report.shoutsAlreadyPresent;
             }
             for (const auto& wordState : shoutState.words) {
                 if (!wordState.known || wordState.form.empty()) {
@@ -1039,69 +1109,82 @@ namespace Savetrix
             }
         }
 
+            report.shoutsImported = true;
+        }
         // Non-destructive inventory import: only tops current stacks up to exported counts.
         // Old profiles are re-filtered too, so quest keys/non-playable technical objects from
         // earlier Savetrix builds are not injected into the destination save.
-        const auto currentCounts = player->GetInventoryCounts();
-        for (const auto& itemState : profile.inventory) {
-            if (itemState.count <= 0) {
-                continue;
-            }
-            auto* object = ResolveFormAs<RE::TESBoundObject>(itemState.form);
-            if (!object) {
-                ++report.missingForms;
-                spdlog::warn("Missing inventory form {} / {}", itemState.form.plugin, itemState.form.editorID);
-                continue;
-            }
-            if (!SafeTransferInventoryItem(object, nullptr)) {
-                ++report.unsafeFormsSkipped;
-                spdlog::info("Skipping unsafe inventory form {} / {}", itemState.form.plugin, itemState.form.name);
-                continue;
-            }
+        if (settings.import.inventory) {
+            const auto currentCounts = player->GetInventoryCounts();
+            for (const auto& itemState : profile.inventory) {
+                if (itemState.count <= 0) {
+                    continue;
+                }
+                auto* object = ResolveFormAs<RE::TESBoundObject>(itemState.form);
+                if (!object) {
+                    ++report.missingForms;
+                    spdlog::warn("Missing inventory form {} / {}", itemState.form.plugin, itemState.form.editorID);
+                    continue;
+                }
+                if (!SafeTransferInventoryItem(object, nullptr)) {
+                    ++report.unsafeFormsSkipped;
+                    spdlog::info("Skipping unsafe inventory form {} / {}", itemState.form.plugin, itemState.form.name);
+                    continue;
+                }
 
-            std::int32_t current = 0;
-            if (const auto it = currentCounts.find(object); it != currentCounts.end()) {
-                current = it->second;
-            }
-            const auto delta = itemState.count - current;
-            if (delta > 0) {
-                player->AddObjectToContainer(object, nullptr, delta, nullptr);
-                ++report.inventoryStacksAdded;
-            }
-        }
-
-
-        auto questsForImport = profile.quests;
-        if (!preflight.mainQuestReady && preflight.mainQuestCandidates > 0) {
-            for (auto& questState : questsForImport) {
-                if (questState.category == "main" && questState.completed && questState.restorable) {
-                    questState.restorable = false;
-                    ++report.mainQuestDeferred;
+                std::int32_t current = 0;
+                if (const auto it = currentCounts.find(object); it != currentCounts.end()) {
+                    current = it->second;
+                }
+                const auto delta = itemState.count - current;
+                if (delta > 0) {
+                    player->AddObjectToContainer(object, nullptr, delta, nullptr);
+                    ++report.inventoryStacksAdded;
+                } else {
+                    ++report.inventoryStacksAlreadySatisfied;
                 }
             }
+            report.inventoryImported = true;
         }
 
-        const auto campaign = ImportCampaignState(questsForImport);
-        report.questsRestored = campaign.restored;
-        report.questsAlreadyComplete = campaign.alreadyComplete;
-        report.questsAlreadyAhead = campaign.alreadyAhead;
-        report.questsSkippedInProgress = campaign.skippedInProgress;
-        report.questsSkippedUnsafe = campaign.skippedUnsafe;
-        report.questsMissing = campaign.missing;
-        report.questsFailed = campaign.failed;
+        if (settings.import.quests) {
+            auto questsForImport = profile.quests;
+            if (!preflight.mainQuestReady && preflight.mainQuestCandidates > 0) {
+                for (auto& questState : questsForImport) {
+                    if (questState.category == "main" && questState.completed && questState.restorable) {
+                        questState.restorable = false;
+                        ++report.mainQuestDeferred;
+                    }
+                }
+            }
+
+            const auto campaign = ImportCampaignState(questsForImport);
+            report.questsRestored = campaign.restored;
+            report.questsAlreadyComplete = campaign.alreadyComplete;
+            report.questsAlreadyAhead = campaign.alreadyAhead;
+            report.questsSkippedInProgress = campaign.skippedInProgress;
+            report.questsSkippedUnsafe = campaign.skippedUnsafe;
+            report.questsMissing = campaign.missing;
+            report.questsFailed = campaign.failed;
+            report.questsImported = true;
+        }
 
         report.hudRefreshQueued = QueueSafeHudRefresh();
-        WriteImportReport(profile, preflight, report);
+        WriteImportReport(profile, settings, preflight, report);
 
         spdlog::info(
-            "Import complete: perks={}, spells={}, suspiciousPerksSkipped={}, suspiciousSpellsSkipped={}, shouts={}, words={}, inventoryStacks={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, mainQuestDeferred={}, questsUnsafe={}, questsFailed={}, hudRefreshQueued={}",
+            "Import complete: perksAdded={}, perksAlready={}, spellsAdded={}, spellsAlready={}, suspiciousPerksSkipped={}, suspiciousSpellsSkipped={}, shoutsAdded={}, shoutsAlready={}, words={}, inventoryStacksAdded={}, inventoryAlready={}, missingForms={}, unsafeFormsSkipped={}, questsRestored={}, mainQuestDeferred={}, questsUnsafe={}, questsFailed={}, hudRefreshQueued={}",
             report.perksAdded,
+            report.perksAlreadyPresent,
             report.spellsAdded,
+            report.spellsAlreadyPresent,
             report.suspiciousPerksSkipped,
             report.suspiciousSpellsSkipped,
             report.shoutsAdded,
+            report.shoutsAlreadyPresent,
             report.wordsUnlocked,
             report.inventoryStacksAdded,
+            report.inventoryStacksAlreadySatisfied,
             report.missingForms,
             report.unsafeFormsSkipped,
             report.questsRestored,
@@ -1111,12 +1194,13 @@ namespace Savetrix
             report.hudRefreshQueued);
 
         std::ostringstream message;
-        message << "Savetrix V2.2: import concluido. Suspeitos ignorados: "
+        message << "Savetrix V2.3: import concluido. Suspeitos ignorados: "
                 << (report.suspiciousPerksSkipped + report.suspiciousSpellsSkipped)
                 << ". Quests: " << report.questsRestored
                 << " restauradas, " << report.mainQuestDeferred << " main quest adiadas, "
                 << report.questsSkippedUnsafe << " protegidas, "
-                << report.questsFailed << " falharam. Relatorio: last_import_report.json. Salve e recarregue.";
+                << report.questsFailed << " falharam. Relatorio: last_import_report.json. "
+                << "Salve em um novo slot, feche o Skyrim completamente, abra novamente pelo SKSE e carregue o save.";
         Notify(message.str());
         return true;
     }

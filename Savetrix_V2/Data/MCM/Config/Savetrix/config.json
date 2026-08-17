@@ -1,0 +1,107 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Exit-9B/MCM-Helper/main/docs/config.schema.json",
+  "modName": "Savetrix",
+  "displayName": "Savetrix",
+  "minMcmVersion": 13,
+  "pages": [
+    {
+      "pageDisplayName": "Migration",
+      "content": [
+        {
+          "type": "header",
+          "text": "Hotkeys"
+        },
+        {
+          "id": "iExportKey:Controls",
+          "text": "Export profile",
+          "type": "keymap",
+          "help": "Export the current character profile.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "iImportKey:Controls",
+          "text": "Import profile",
+          "type": "keymap",
+          "help": "Import the saved profile into the current character.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "type": "header",
+          "text": "Selective Import"
+        },
+        {
+          "id": "bStats:Import",
+          "text": "Stats / Level",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bSkills:Import",
+          "text": "Skills / Legendary",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bPerks:Import",
+          "text": "Perks",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bSpells:Import",
+          "text": "Spells / Powers",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bShouts:Import",
+          "text": "Shouts / Words",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bInventory:Import",
+          "text": "Inventory",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bQuests:Import",
+          "text": "Supported Quests",
+          "type": "toggle",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "type": "header",
+          "text": "After Import"
+        },
+        {
+          "type": "text",
+          "text": "Restart required",
+          "valueOptions": {
+            "value": "Save in a new slot, quit Skyrim to desktop, restart through SKSE, then load the save."
+          }
+        }
+      ]
+    }
+  ],
+  "cursorFillMode": "topToBottom"
+}

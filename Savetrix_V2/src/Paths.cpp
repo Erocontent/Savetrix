@@ -25,4 +25,15 @@ namespace Savetrix::Paths
     {
         return ProfileDirectory() / "profile.json";
     }
+
+    std::filesystem::path McmDefaultsPath()
+    {
+        return SkyrimRoot() / "Data" / "MCM" / "Config" / "Savetrix" / "settings.ini";
+    }
+
+    std::filesystem::path McmUserSettingsPath()
+    {
+        return SkyrimRoot() / "Data" / "MCM" / "Settings" / "Savetrix.ini";
+    }
 }
+

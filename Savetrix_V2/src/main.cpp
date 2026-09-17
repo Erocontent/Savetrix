@@ -11,6 +11,13 @@
 #include "Profile.h"
 #include "Settings.h"
 
+// Export the metadata SKSE uses to discover Savetrix on AE, including Steam 1.6.1170.
+SKSEPluginInfo(
+    .Version = REL::Version{ 2, 0, 0, 0 },
+    .Name = std::string_view{ "Savetrix" },
+    .StructCompatibility = SKSE::StructCompatibility::Independent,
+    .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary)
+
 namespace
 {
     void InitializeLog()

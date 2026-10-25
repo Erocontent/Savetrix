@@ -33,11 +33,16 @@ class MetadataTests(unittest.TestCase):
                 verify.validate_pe(pe, "2.3.1")
 
     def test_rejects_wrong_version_and_compatibility(self):
-        for offset in (0, 4, 8, 0x304, 0x308, 0x30C, 0x34C):
+        for offset in (0, 4, 8, 0x304, 0x308, 0x34C):
             pe = self.fixture()
             self.data[offset] ^= 2
             with self.subTest(offset=offset), self.assertRaises(ValueError):
                 verify.validate_pe(pe, "2.3.1")
+
+    def test_address_library_ignores_default_runtime_list(self):
+        pe = self.fixture()
+        struct.pack_into("<16I", self.data, 0x30C, *([0x01000000] * 16))
+        verify.validate_pe(pe, "2.3.1")
 
     def test_rejects_wrong_architecture(self):
         pe = self.fixture()

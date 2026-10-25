@@ -96,4 +96,3 @@ if(SAVETRIX_BUILD_TESTS)
     add_test(NAME settings COMMAND SavetrixSettingsTests "${CMAKE_CURRENT_BINARY_DIR}/settings-tests")
     add_test(NAME input COMMAND SavetrixInputTests)
 endif()
-

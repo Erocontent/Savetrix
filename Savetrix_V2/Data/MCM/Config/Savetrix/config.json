@@ -4,9 +4,25 @@
   "displayName": "Savetrix",
   "minMcmVersion": 13,
   "content": [
-    { "type": "header", "text": "Savetrix" },
-    { "type": "text", "text": "Settings", "valueOptions": { "value": "Select the Migration page." } },
-    { "type": "text", "text": "Controls", "valueOptions": { "value": "Use keyboard hotkeys after closing all menus." } }
+    {
+      "type": "header",
+      "text": "Savetrix"
+    },
+    {
+      "type": "text",
+      "text": "Settings",
+      "valueOptions": {
+        "value": "Select Migration"
+      }
+    },
+    {
+      "type": "text",
+      "text": "Hotkeys",
+      "valueOptions": {
+        "value": "Keyboard only"
+      },
+      "help": "Close all menus before using an export or import hotkey."
+    }
   ],
   "pages": [
     {
@@ -14,7 +30,8 @@
       "content": [
         {
           "type": "header",
-          "text": "Hotkeys"
+          "text": "Hotkeys",
+          "position": 0
         },
         {
           "id": "iExportKey:Controls",
@@ -23,7 +40,8 @@
           "help": "Keyboard only. Close all menus before exporting. Defaults to F10. This replaces profile.json.",
           "valueOptions": {
             "sourceType": "ModSettingInt"
-          }
+          },
+          "position": 2
         },
         {
           "id": "iImportKey:Controls",
@@ -32,11 +50,13 @@
           "help": "Keyboard only. Close all menus before importing. Defaults to F11. Back up the destination save first.",
           "valueOptions": {
             "sourceType": "ModSettingInt"
-          }
+          },
+          "position": 4
         },
         {
           "type": "header",
-          "text": "Selective Import"
+          "text": "Selective Import",
+          "position": 8
         },
         {
           "id": "bStats:Import",
@@ -44,7 +64,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 10
         },
         {
           "id": "bSkills:Import",
@@ -52,7 +73,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 12
         },
         {
           "id": "bPerks:Import",
@@ -60,7 +82,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 14
         },
         {
           "id": "bSpells:Import",
@@ -68,7 +91,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 16
         },
         {
           "id": "bShouts:Import",
@@ -76,7 +100,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 18
         },
         {
           "id": "bInventory:Import",
@@ -84,7 +109,8 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 20
         },
         {
           "id": "bQuests:Import",
@@ -92,18 +118,22 @@
           "type": "toggle",
           "valueOptions": {
             "sourceType": "ModSettingBool"
-          }
+          },
+          "position": 22
         },
         {
           "type": "header",
-          "text": "After Import"
+          "text": "After Import",
+          "position": 1
         },
         {
           "type": "text",
-          "text": "Restart required",
+          "text": "Required",
           "valueOptions": {
-            "value": "Save in a new slot, quit Skyrim to desktop, restart through SKSE, then load the save."
-          }
+            "value": "Save and restart via SKSE"
+          },
+          "position": 3,
+          "help": "Save in a new slot, quit Skyrim to desktop, restart through SKSE, then load the save."
         }
       ]
     }

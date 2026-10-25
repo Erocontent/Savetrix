@@ -33,8 +33,10 @@ def validate_pe(pe, expected_version):
         raise ValueError("struct compatibility must match CommonLib NG's independent layouts")
     if struct.unpack_from("<I", data, 0x308)[0] != 1:
         raise ValueError("Address Library runtime compatibility must be enabled")
-    if any(data[0x30C:]):
-        raise ValueError("unexpected runtime whitelist or minimum SKSE version")
+    # Address Library mode does not use the runtime whitelist. CommonLib's
+    # default VersionNumber constructor may populate it with 1.0.0 entries.
+    if struct.unpack_from("<I", data, 0x34C)[0] != 0:
+        raise ValueError("unexpected minimum SKSE version")
     return symbols
 
 

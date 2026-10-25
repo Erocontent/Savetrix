@@ -27,6 +27,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(CommonLibSSE)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 find_path(SIMPLEINI_INCLUDE_DIRS "SimpleIni.h" REQUIRED)
 configure_file(src/Version.h.in generated/Version.h @ONLY)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/Savetrix.version" "${PROJECT_VERSION}\n")
@@ -95,3 +96,4 @@ if(SAVETRIX_BUILD_TESTS)
     add_test(NAME settings COMMAND SavetrixSettingsTests "${CMAKE_CURRENT_BINARY_DIR}/settings-tests")
     add_test(NAME input COMMAND SavetrixInputTests)
 endif()
+

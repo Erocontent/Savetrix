@@ -9,11 +9,11 @@
 #include <nlohmann/json.hpp>
 
 #include "FormRef.h"
+#include "Version.h"
 
 namespace Savetrix
 {
     inline constexpr std::uint32_t kSchemaVersion = 3;
-    inline constexpr std::string_view kModVersion = "2.3.0";
     inline constexpr std::size_t kSkillCount = 18;
 
     struct SkillState

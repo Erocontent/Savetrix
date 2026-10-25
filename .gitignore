@@ -1,0 +1,5 @@
+Savetrix_V2/build*/
+Savetrix_V2/package/
+Savetrix_V2/*.zip
+**/__pycache__/
+.superpowers/

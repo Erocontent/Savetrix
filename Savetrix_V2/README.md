@@ -1,5 +1,7 @@
 # Savetrix V2
 
+Current source: **2.3.1 hotfix candidate**. This source version does not establish the version or contents of the archive published on Nexus.
+
 **Savetrix** is an SKSE/CommonLibSSE-NG mod for **Skyrim Special Edition / Anniversary Edition** that exports a portable character profile to JSON and applies it to another save.
 
 ## What V2 transfers
@@ -41,6 +43,10 @@ V2 never regresses a destination quest that is already further ahead, and it doe
 - **F10** — export the current character + campaign profile
 - **F11** — import `profile.json` into the current save
 
+These are the defaults. Configure **keyboard** hotkeys and selective-import categories in the Savetrix MCM (SkyUI + MCM Helper required); enable `Savetrix.esp`. Close all menus before pressing a transfer hotkey. Mouse/gamepad bindings are not supported. Unbinding a key disables its action.
+
+Default settings: `Data/MCM/Config/Savetrix/settings.ini`. User overrides: `Data/MCM/Settings/Savetrix.ini`. MCM Helper writes user overrides, not the defaults file. When using MO2, check its Overwrite/output mod for generated profiles and settings. The DLL also works without the MCM using defaults or a manually edited INI.
+
 The profile is stored at:
 
 `Skyrim Special Edition/Data/SKSE/Plugins/Savetrix/profile.json`
@@ -69,7 +75,7 @@ The campaign layer is a **milestone replayer**, not a complete save-state clone.
 3. Load or create the destination save.
 4. Make a manual backup save before the first import.
 5. Press **F11**.
-6. Make a new manual save and reload it after the import.
+6. Save in a **new slot**, quit Skyrim to desktop, restart through SKSE, then load that save.
 7. Check `Documents/My Games/Skyrim Special Edition/SKSE/Savetrix.log` if something was skipped or missing.
 
 ## Build on Windows
@@ -81,6 +87,7 @@ Requirements:
 - Git
 - vcpkg
 - `VCPKG_ROOT` configured
+- Python with `pefile==2024.8.26` (`python -m pip install pefile==2024.8.26`)
 
 PowerShell:
 
@@ -109,7 +116,7 @@ The repository already contains:
 
 `.github/workflows/build.yml`
 
-The workflow builds on Windows Server 2022 using MSVC, validates the profile schema, verifies `Savetrix.dll`, packages the mod, and publishes two GitHub Actions artifacts:
+The workflow builds on Windows Server 2022 using MSVC, runs native and Python regression tests, verifies actual SKSE exports and metadata in `Savetrix.dll`, packages the mod, and publishes two GitHub Actions artifacts:
 
 - `Savetrix-V2-Windows`
 - `Savetrix-V2-DLL`

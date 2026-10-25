@@ -11,10 +11,11 @@
 #include "Profile.h"
 #include "Settings.h"
 
-// Export the metadata SKSE uses to discover Savetrix on AE, including Steam 1.6.1170.
+// PR #1 (JackOfSpeed-01): export the metadata required for AE discovery.
 SKSEPluginInfo(
-    .Version = REL::Version{ 2, 0, 0, 0 },
+    .Version = REL::Version{ Savetrix::kVersionMajor, Savetrix::kVersionMinor, Savetrix::kVersionPatch, 0 },
     .Name = std::string_view{ "Savetrix" },
+    .Author = std::string_view{ "Erocontent" },
     .StructCompatibility = SKSE::StructCompatibility::Independent,
     .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary)
 
@@ -65,8 +66,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         std::string(Savetrix::kModVersion),
         REL::Module::get().version().string());
 
-    if (auto* messaging = SKSE::GetMessagingInterface()) {
-        messaging->RegisterListener(MessageHandler);
+    auto* messaging = SKSE::GetMessagingInterface();
+    if (!messaging || !messaging->RegisterListener(MessageHandler)) {
+        spdlog::error("Savetrix failed to register the SKSE message listener; hotkeys unavailable");
+        return false;
     }
 
     return true;

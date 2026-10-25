@@ -22,6 +22,13 @@ namespace Savetrix
         }
 
         for (auto* event = *a_event; event; event = event->next) {
+            // MCM key remapping receives the same events as gameplay.
+            auto* ui = RE::UI::GetSingleton();
+            if (!ui || ui->GameIsPaused() || ui->IsApplicationMenuOpen() ||
+                ui->IsMenuOpen(RE::Console::MENU_NAME) || ui->IsMenuOpen(RE::JournalMenu::MENU_NAME) ||
+                ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) {
+                return RE::BSEventNotifyControl::kContinue;
+            }
             if (event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton || event->GetDevice() != RE::INPUT_DEVICE::kKeyboard) {
                 continue;
             }
@@ -32,9 +39,9 @@ namespace Savetrix
 
             const auto settings = Settings::GetSingleton().GetSnapshot();
             const auto key = button->GetIDCode();
-            if (key == settings.exportKey) {
+            if (settings.exportKey != 0 && key == settings.exportKey) {
                 TransferService::GetSingleton().ExportCurrentCharacter();
-            } else if (key == settings.importKey) {
+            } else if (settings.importKey != 0 && key == settings.importKey) {
                 TransferService::GetSingleton().ImportCurrentCharacter();
             }
         }

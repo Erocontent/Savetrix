@@ -3,6 +3,11 @@
   "modName": "Savetrix",
   "displayName": "Savetrix",
   "minMcmVersion": 13,
+  "content": [
+    { "type": "header", "text": "Savetrix" },
+    { "type": "text", "text": "Settings", "valueOptions": { "value": "Select the Migration page." } },
+    { "type": "text", "text": "Controls", "valueOptions": { "value": "Use keyboard hotkeys after closing all menus." } }
+  ],
   "pages": [
     {
       "pageDisplayName": "Migration",
@@ -15,7 +20,7 @@
           "id": "iExportKey:Controls",
           "text": "Export profile",
           "type": "keymap",
-          "help": "Export the current character profile.",
+          "help": "Keyboard only. Close all menus before exporting. Defaults to F10. This replaces profile.json.",
           "valueOptions": {
             "sourceType": "ModSettingInt"
           }
@@ -24,7 +29,7 @@
           "id": "iImportKey:Controls",
           "text": "Import profile",
           "type": "keymap",
-          "help": "Import the saved profile into the current character.",
+          "help": "Keyboard only. Close all menus before importing. Defaults to F11. Back up the destination save first.",
           "valueOptions": {
             "sourceType": "ModSettingInt"
           }

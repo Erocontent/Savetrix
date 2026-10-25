@@ -676,6 +676,7 @@ namespace Savetrix
     void TransferService::Notify(const std::string& a_text)
     {
         spdlog::info("{}", a_text);
+        RE::SendHUDMessage::ShowHUDMessage(a_text.c_str(), nullptr, false);
     }
 
     bool TransferService::ExportCurrentCharacter()
@@ -686,10 +687,11 @@ namespace Savetrix
         auto* skillData = GetSkillData(player);
         if (!player || !base || !actorValues || !skillData) {
             spdlog::error("Export failed: player data unavailable");
-            Notify("Savetrix: falha ao ler o personagem.");
+            Notify("Savetrix: character data unavailable. Wait until the save has loaded.");
             return false;
         }
 
+        Notify("Savetrix: exporting profile...");
         Profile profile;
         profile.exportedAtUtc = TimestampUtc();
         profile.runtimeVersion = REL::Module::get().version().string();
@@ -900,11 +902,11 @@ namespace Savetrix
             }
 
             spdlog::info("Exported '{}' level {} with {} quest snapshots to {}", profile.characterName, profile.stats.level, profile.quests.size(), target.string());
-            Notify("Savetrix V2.3: export concluido. Itens suspeitos ficam no JSON, mas F11 nao os importa.");
+            Notify("Savetrix: export complete. Saved SKSE/Plugins/Savetrix/profile.json.");
             return true;
         } catch (const std::exception& e) {
             spdlog::error("Export failed: {}", e.what());
-            Notify("Savetrix: erro ao gravar profile.json.");
+            Notify("Savetrix: export failed. See Savetrix.log.");
             return false;
         }
     }
@@ -915,7 +917,7 @@ namespace Savetrix
         try {
             std::ifstream in(Paths::ProfilePath(), std::ios::binary);
             if (!in) {
-                Notify("Savetrix: profile.json nao encontrado. Use F10 primeiro.");
+                Notify("Savetrix: cannot read profile.json. Export a profile first; see Savetrix.log.");
                 return false;
             }
             nlohmann::json json;
@@ -923,7 +925,7 @@ namespace Savetrix
             profile = json.get<Profile>();
         } catch (const std::exception& e) {
             spdlog::error("Import parse failed: {}", e.what());
-            Notify("Savetrix: profile.json invalido ou incompatível.");
+            Notify("Savetrix: invalid or incompatible profile.json. See Savetrix.log.");
             return false;
         }
 
@@ -932,20 +934,20 @@ namespace Savetrix
         auto* actorValues = GetPlayerActorValueOwner(player);
         auto* skillData = GetSkillData(player);
         if (!player || !base || !actorValues || !skillData) {
-            Notify("Savetrix: falha ao acessar o personagem atual.");
+            Notify("Savetrix: character data unavailable. Wait until the save has loaded.");
             return false;
         }
 
         if (importAppliedThisProcess_) {
             spdlog::warn("Import blocked: F11 was already used successfully in this Skyrim process");
-            Notify("Savetrix V2.3: F11 ja foi usado nesta execucao. Salve, feche o Skyrim e abra novamente para outro import.");
+            Notify("Savetrix: import already applied. Save and restart Skyrim before another import.");
             return false;
         }
 
         const auto settings = Settings::GetSingleton().GetSnapshot();
         if (!settings.import.AnyEnabled()) {
             spdlog::warn("Import blocked: all selective-import categories are disabled");
-            Notify("Savetrix V2.3: nenhuma categoria de importacao esta habilitada. Ative ao menos uma no MCM/INI.");
+            Notify("Savetrix: import blocked. Enable at least one category in MCM/INI.");
             return false;
         }
 
@@ -953,7 +955,7 @@ namespace Savetrix
         LogPreflight(preflight);
         if (!preflight.coreDataValid) {
             spdlog::error("Import blocked by preflight: invalid core numeric data");
-            Notify("Savetrix V2.3: preflight bloqueou o import por dados centrais invalidos.");
+            Notify("Savetrix: import blocked by invalid profile data. See Savetrix.log.");
             return false;
         }
 
@@ -963,6 +965,7 @@ namespace Savetrix
                 preflight.mainQuestCandidates);
         }
 
+        Notify("Savetrix: importing profile...");
         ImportReport report;
         importAppliedThisProcess_ = true;
 
@@ -1193,15 +1196,10 @@ namespace Savetrix
             report.questsFailed,
             report.hudRefreshQueued);
 
-        std::ostringstream message;
-        message << "Savetrix V2.3: import concluido. Suspeitos ignorados: "
-                << (report.suspiciousPerksSkipped + report.suspiciousSpellsSkipped)
-                << ". Quests: " << report.questsRestored
-                << " restauradas, " << report.mainQuestDeferred << " main quest adiadas, "
-                << report.questsSkippedUnsafe << " protegidas, "
-                << report.questsFailed << " falharam. Relatorio: last_import_report.json. "
-                << "Salve em um novo slot, feche o Skyrim completamente, abra novamente pelo SKSE e carregue o save.";
-        Notify(message.str());
+        Notify("Savetrix: import finished. Review Savetrix.log and last_import_report.json.");
+        RE::DebugMessageBox(
+            "Savetrix: import finished. Some content may have been skipped; review the log and import report.\n\n"
+            "Save in a NEW slot, quit Skyrim to desktop, restart through SKSE, then load that save.");
         return true;
     }
 }

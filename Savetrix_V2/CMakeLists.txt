@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     Savetrix
-    VERSION 2.0.0
+    VERSION 2.3.1
     LANGUAGES CXX
 )
 
@@ -27,6 +27,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(CommonLibSSE)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_path(SIMPLEINI_INCLUDE_DIRS "SimpleIni.h" REQUIRED)
+configure_file(src/Version.h.in generated/Version.h @ONLY)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/Savetrix.version" "${PROJECT_VERSION}\n")
 
 add_library(
     Savetrix
@@ -52,6 +55,7 @@ target_link_libraries(
         CommonLibSSE::CommonLibSSE
         nlohmann_json::nlohmann_json
 )
+target_include_directories(Savetrix PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" ${SIMPLEINI_INCLUDE_DIRS})
 
 target_compile_definitions(
     Savetrix
@@ -76,3 +80,18 @@ add_custom_command(
         "${CMAKE_BINARY_DIR}/dist/Data/SKSE/Plugins/Savetrix.dll"
     COMMENT "Staging Savetrix.dll"
 )
+
+option(SAVETRIX_BUILD_TESTS "Build Savetrix regression tests" ON)
+if(SAVETRIX_BUILD_TESTS)
+    enable_testing()
+    add_executable(SavetrixSettingsTests tests/settings_tests.cpp)
+    add_executable(SavetrixInputTests tests/input_tests.cpp src/InputSink.cpp)
+    target_include_directories(SavetrixInputTests BEFORE PRIVATE tests/stubs)
+    foreach(test_target SavetrixSettingsTests SavetrixInputTests)
+        target_include_directories(${test_target} PRIVATE src ${SIMPLEINI_INCLUDE_DIRS})
+        target_link_libraries(${test_target} PRIVATE spdlog::spdlog)
+        target_compile_definitions(${test_target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endforeach()
+    add_test(NAME settings COMMAND SavetrixSettingsTests "${CMAKE_CURRENT_BINARY_DIR}/settings-tests")
+    add_test(NAME input COMMAND SavetrixInputTests)
+endif()
